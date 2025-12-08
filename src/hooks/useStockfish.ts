@@ -1,12 +1,34 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 interface StockfishEvaluation {
-  score: number; // centipawns (positive = white advantage)
-  mate?: number; // moves to mate (positive = white mates, negative = black mates)
+  score: number;
+  mate?: number;
   bestMove?: string;
   depth?: number;
 }
 
+// -------------------
+// NEW: factory loader
+// -------------------
+async function createStockfishFactory(
+  url = 'https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish.js'
+): Promise<() => Worker> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch Stockfish script: ${res.status}`);
+  const scriptText = await res.text();
+
+  const blob = new Blob([scriptText + '\n//# sourceURL=stockfish.js'], {
+    type: 'application/javascript',
+  });
+
+  const blobUrl = URL.createObjectURL(blob);
+
+  return () => new Worker(blobUrl);
+}
+
+// -------------------
+// YOUR ORIGINAL HOOK
+// -------------------
 export const useStockfish = () => {
   const engineRef = useRef<any>(null);
   const [isReady, setIsReady] = useState(false);
@@ -14,49 +36,47 @@ export const useStockfish = () => {
   const pendingCallbackRef = useRef<((evaluation: StockfishEvaluation) => void) | null>(null);
 
   useEffect(() => {
-    // Load Stockfish.js from CDN
     const loadStockfish = async () => {
       try {
-        // @ts-ignore - Stockfish is loaded from CDN
-        const Stockfish = await import('https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish.js');
-        const engine = Stockfish();
-        
+        // 🔥 use factory instead of CDN import()
+        const Stockfish = await createStockfishFactory();
+        const engine = Stockfish(); // returns Worker
+
         let currentEval: StockfishEvaluation = { score: 0 };
-        
-        engine.onmessage = (line: string) => {
+
+        engine.onmessage = (event: MessageEvent) => {
+          const line = typeof event.data === 'string' ? event.data : '';
           console.log('Stockfish:', line);
-          
+
           if (line.includes('uciok')) {
             engine.postMessage('isready');
           } else if (line.includes('readyok')) {
             setIsReady(true);
           } else if (line.startsWith('info') && line.includes('score')) {
-            // Parse evaluation from info line
             const depthMatch = line.match(/depth (\d+)/);
             const scoreMatch = line.match(/score cp (-?\d+)/);
             const mateMatch = line.match(/score mate (-?\d+)/);
             const pv = line.match(/pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
-            
+
             if (depthMatch) {
               const depth = parseInt(depthMatch[1]);
-              
+
               if (mateMatch) {
                 currentEval = {
                   score: parseInt(mateMatch[1]) > 0 ? 999 : -999,
                   mate: parseInt(mateMatch[1]),
                   depth,
-                  bestMove: pv ? pv[1] : undefined
+                  bestMove: pv ? pv[1] : undefined,
                 };
               } else if (scoreMatch) {
                 currentEval = {
-                  score: parseInt(scoreMatch[1]) / 100, // Convert centipawns to pawns
+                  score: parseInt(scoreMatch[1]) / 100,
                   depth,
-                  bestMove: pv ? pv[1] : undefined
+                  bestMove: pv ? pv[1] : undefined,
                 };
               }
             }
           } else if (line.startsWith('bestmove')) {
-            // Final evaluation ready
             setEvaluation(currentEval);
             if (pendingCallbackRef.current) {
               pendingCallbackRef.current(currentEval);
@@ -64,12 +84,11 @@ export const useStockfish = () => {
             }
           }
         };
-        
+
         engineRef.current = engine;
         engine.postMessage('uci');
       } catch (error) {
         console.error('Failed to load Stockfish:', error);
-        // Fallback to ready state for development
         setIsReady(true);
       }
     };
@@ -83,31 +102,40 @@ export const useStockfish = () => {
     };
   }, []);
 
-  const evaluatePosition = useCallback((fen: string, callback?: (evaluation: StockfishEvaluation) => void, depth: number = 15) => {
-    if (!isReady) {
-      console.warn('Engine not ready');
-      return;
-    }
-
-    if (!engineRef.current) {
-      console.warn('Engine not initialized');
-      return;
-    }
-
-    pendingCallbackRef.current = callback || null;
-
-    // Send position to Stockfish
-    engineRef.current.postMessage('position fen ' + fen);
-    engineRef.current.postMessage(`go depth ${depth}`);
-  }, [isReady]);
-
-  const getBestMove = useCallback((fen: string, callback: (move: string) => void, depth: number = 15) => {
-    evaluatePosition(fen, (evaluation) => {
-      if (evaluation.bestMove) {
-        callback(evaluation.bestMove);
+  const evaluatePosition = useCallback(
+    (fen: string, callback?: (evaluation: StockfishEvaluation) => void, depth: number = 15) => {
+      if (!isReady) {
+        console.warn('Engine not ready');
+        return;
       }
-    }, depth);
-  }, [evaluatePosition]);
+
+      if (!engineRef.current) {
+        console.warn('Engine not initialized');
+        return;
+      }
+
+      pendingCallbackRef.current = callback || null;
+
+      engineRef.current.postMessage('position fen ' + fen);
+      engineRef.current.postMessage(`go depth ${depth}`);
+    },
+    [isReady]
+  );
+
+  const getBestMove = useCallback(
+    (fen: string, callback: (move: string) => void, depth: number = 15) => {
+      evaluatePosition(
+        fen,
+        (evaluation) => {
+          if (evaluation.bestMove) {
+            callback(evaluation.bestMove);
+          }
+        },
+        depth
+      );
+    },
+    [evaluatePosition]
+  );
 
   return {
     isReady,

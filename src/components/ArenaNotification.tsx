@@ -79,12 +79,12 @@ const ArenaNotification = ({ notification, onClose }: ArenaNotificationProps) =>
         ) : (
           <div className="p-4">
             <div className="flex items-start gap-3">
-              <div className="p-2 bg-purple-900/30 rounded-lg border border-purple-600/50">
-                <Gift className="w-5 h-5 text-purple-400" />
+              <div className="p-2 bg-blue-900/30 rounded-lg border border-blue-600/50">
+                <Gift className="w-5 h-5 text-blue-400" />
               </div>
               <div className="flex-1">
-                <div className="flex items-center justify-between mb-1">
-                  <h4 className="text-sm font-semibold text-white">Item Dropped</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold text-white">Item Received</h4>
                   <button
                     onClick={() => {
                       setIsVisible(false);
@@ -95,19 +95,28 @@ const ArenaNotification = ({ notification, onClose }: ArenaNotificationProps) =>
                     <X className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-xs text-[#b5b5b5] mb-1">
-                  <span className="text-purple-400 font-semibold">{notification.itemName}</span>
-                </p>
-                <div className="space-y-1">
-                  <p className="text-xs text-[#b5b5b5]">
-                    Purchased by: <span className="text-white">{notification.purchaserName}</span>
-                  </p>
-                  <p className="text-xs text-[#b5b5b5]">
-                    Target: <span className="text-white">{notification.targetPlayerName}</span>
-                  </p>
-                  <Badge className="bg-purple-900/50 border-purple-600/50 text-purple-300 text-sm font-semibold px-2 py-0.5">
-                    Cost: {notification.cost}
-                  </Badge>
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs text-[#b5b5b5] mb-1">Item</p>
+                    <p className="text-sm font-bold text-blue-400">{notification.itemName}</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <p className="text-xs text-[#b5b5b5] mb-1">Target Player</p>
+                      <p className="text-sm font-semibold text-white">{notification.targetPlayerName}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[#b5b5b5] mb-1">Cost</p>
+                      <Badge className="bg-yellow-900/50 border-yellow-600/50 text-yellow-300 text-sm font-bold px-2 py-0.5">
+                        {notification.cost}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="pt-1 border-t border-white/10">
+                    <p className="text-xs text-[#b5b5b5]">
+                      Purchased by <span className="text-white font-semibold">{notification.purchaserName}</span>
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

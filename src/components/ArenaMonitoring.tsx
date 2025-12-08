@@ -143,8 +143,8 @@ const ArenaMonitoring = ({
           </div>
         )}
 
-        {/* Disconnect Button - Only show to creator */}
-        {showDisconnect && isGameCreator && (
+        {/* Disconnect Button - Always show when arena is connected and user is creator */}
+        {(showDisconnect || (arenaGameState && isGameCreator && statusLabel !== "completed" && statusLabel !== "stopped")) && (
           <div className="mb-4">
             <Button
               onClick={onDisconnect}
@@ -152,7 +152,7 @@ const ArenaMonitoring = ({
               className="w-full bg-gradient-to-r from-red-900/40 to-red-800/40 hover:from-red-900/60 hover:to-red-800/60 text-red-200 border-2 border-red-700/30 font-black tracking-wider uppercase transition-all duration-300 hover:scale-105"
             >
               <WifiOff className="w-4 h-4 mr-2" />
-              Disconnect Arena
+              {statusLabel === "live" ? "Stop & Disconnect Arena" : "Disconnect Arena"}
             </Button>
           </div>
         )}

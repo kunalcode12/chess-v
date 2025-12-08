@@ -76,8 +76,44 @@ const Game = () => {
   const [hintSquares, setHintSquares] = useState<Square[]>([]);
   const [bestMoveSquares, setBestMoveSquares] = useState<{ from: Square; to: Square } | null>(null);
   const [fireTrailActive, setFireTrailActive] = useState(false);
-  const [moveHistory, setMoveHistory] = useState<Array<{ fen: string; move: any }>>([]);
+  // Enhanced move history with full game snapshots
+  interface GameSnapshot {
+    fen: string;
+    activeColor: 'w' | 'b';
+    capturedPieces: { whiteCaptured: string[]; blackCaptured: string[] };
+    castlingRights: string;
+    enPassant: string | null;
+    moveNumber: number;
+    halfMoveClock: number;
+    playerWhoMoved?: 'w' | 'b'; // Track which player made the move that led to this state
+    moveNotation?: string; // Track the move notation
+    metadata?: any;
+  }
+  const [moveHistory, setMoveHistory] = useState<GameSnapshot[]>([]);
   const [isFrozen, setIsFrozen] = useState(false);
+  const [shieldRewindActive, setShieldRewindActive] = useState(false);
+  const [showTurnRewound, setShowTurnRewound] = useState(false);
+  const [whiteShields, setWhiteShields] = useState(0);
+  const [blackShields, setBlackShields] = useState(0);
+  const [chronoChipActive, setChronoChipActive] = useState(false);
+  const [chronoChipTarget, setChronoChipTarget] = useState<'w' | 'b' | null>(null);
+  const [showTimeBonus, setShowTimeBonus] = useState(false);
+  const [freezeClockActive, setFreezeClockActive] = useState(false);
+  const [freezeClockTarget, setFreezeClockTarget] = useState<'w' | 'b' | null>(null);
+  const [showTimeDrain, setShowTimeDrain] = useState(false);
+  const [pieceSwapActive, setPieceSwapActive] = useState(false);
+  const [pieceSwapTarget, setPieceSwapTarget] = useState<'w' | 'b' | null>(null);
+  const [swapSelectedPieces, setSwapSelectedPieces] = useState<{ first: Square | null; second: Square | null }>({ first: null, second: null });
+  const [swapAnimationActive, setSwapAnimationActive] = useState(false);
+  const isSwappingRef = useRef(false);
+  const [doubleMoveActive, setDoubleMoveActive] = useState(false);
+  const [doubleMoveTarget, setDoubleMoveTarget] = useState<'w' | 'b' | null>(null);
+  const [doubleMoveCount, setDoubleMoveCount] = useState(0);
+  const [doubleMoveActivated, setDoubleMoveActivated] = useState(false);
+  const [empoweredPiece, setEmpoweredPiece] = useState<{ square: Square; player: 'w' | 'b'; pieceType?: string } | null>(null);
+  const [showPowerCapture, setShowPowerCapture] = useState(false);
+  const [powerCaptureSquare, setPowerCaptureSquare] = useState<Square | null>(null);
+  const [showEmpowerNotification, setShowEmpowerNotification] = useState(false);
 
   // Arena Game Service
   const arenaServiceRef = useRef<ArenaGameService | null>(null);
@@ -387,11 +423,12 @@ const Game = () => {
       setLastDrop(dropInfo);
       setMonitorEvents((prev) => [
         ...prev,
-        { type: "package_drop", data: dropInfo, timestamp: new Date() },
+        { type: "package_drop", data: dropInfo , timestamp: new Date() },
       ]);
     };
 
     arena.onImmediateItemDrop = (data) => {
+      console.log("Immediate item drop:", data);
       const itemData = data?.item || data;
       const packageData = data?.package || data;
       const itemName =
@@ -427,6 +464,213 @@ const Game = () => {
         targetPlayerName,
         purchaserName: purchaserUsername,
       });
+
+      // Add Shield to the target player if item is "Shield Move"
+      if (itemName === "Shield Move") {
+        if (targetPlayerName === "White") {
+          setWhiteShields((prev) => prev + 1);
+          // Also activate perk if current player is white
+          if (playerColor === 'w') {
+            activatePerk("1 shield (undo)");
+          }
+        } else if (targetPlayerName === "Black") {
+          setBlackShields((prev) => prev + 1);
+          // Also activate perk if current player is black
+          if (playerColor === 'b') {
+            activatePerk("1 shield (undo)");
+          }
+        }
+        
+        toast({
+          title: "Shield Received!",
+          description: `${targetPlayerName} received a Shield Move power-up`,
+        });
+      }
+
+      // Handle Chrono Chip - adds +10 seconds to target player's timer
+      if (itemName === "Chrono Chip" && gameId && game) {
+        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        
+        // Activate visual effects
+        setChronoChipActive(true);
+        setChronoChipTarget(targetColor);
+        setShowTimeBonus(true);
+        
+        // Add 10 seconds to the target player's timer
+        const timeField = targetColor === 'w' ? 'white_time_remaining' : 'black_time_remaining';
+        const currentTime = game[timeField] || 0;
+        const newTime = currentTime + 10;
+        
+        // Update database
+        supabase
+          .from('games')
+          .update({
+            [timeField]: newTime,
+          })
+          .eq('id', gameId)
+          .then(() => {
+            // Update local game state
+            setGame((prev: any) => ({
+              ...prev,
+              [timeField]: newTime,
+            }));
+          });
+        
+        // Hide visual effects after animation
+        setTimeout(() => {
+          setChronoChipActive(false);
+          setChronoChipTarget(null);
+        }, 2000);
+        
+        setTimeout(() => {
+          setShowTimeBonus(false);
+        }, 1500);
+      }
+
+      // Handle Freeze Enemy Clock - drains 10 seconds from target player's timer
+      if (itemName === "Freeze Enemy Clock" && gameId && game) {
+        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        
+        // Activate visual effects
+        setFreezeClockActive(true);
+        setFreezeClockTarget(targetColor);
+        setShowTimeDrain(true);
+        
+        // Drain 10 seconds from the target player's timer (minimum 0)
+        const timeField = targetColor === 'w' ? 'white_time_remaining' : 'black_time_remaining';
+        const currentTime = game[timeField] || 0;
+        const newTime = Math.max(0, currentTime - 10);
+        
+        // Update database
+        supabase
+          .from('games')
+          .update({
+            [timeField]: newTime,
+          })
+          .eq('id', gameId)
+          .then(() => {
+            // Update local game state
+            setGame((prev: any) => ({
+              ...prev,
+              [timeField]: newTime,
+            }));
+          });
+        
+        // Hide visual effects after animation
+        setTimeout(() => {
+          setFreezeClockActive(false);
+          setFreezeClockTarget(null);
+        }, 2000);
+        
+        setTimeout(() => {
+          setShowTimeDrain(false);
+        }, 1500);
+      }
+
+      // Handle Piece Swap - allows target player to swap two of their pieces
+      if (itemName === "Piece Swap" && gameId && game) {
+        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        
+        // Set up piece swap for when it's the target player's turn
+        setPieceSwapTarget(targetColor);
+        
+        // If it's already the target player's turn, activate swap mode immediately
+        if (chess.turn() === targetColor) {
+          setPieceSwapActive(true);
+          toast({
+            title: "Piece Swap Active!",
+            description: "Click on two of your pieces to swap their positions",
+          });
+        } else {
+          toast({
+            title: "Piece Swap Ready",
+            description: `Piece swap will activate when ${targetPlayerName}'s turn begins`,
+          });
+        }
+      }
+
+      // Handle Double Move - allows target player to make 2 moves back-to-back
+      if (itemName === "Double Move" && gameId && game) {
+        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        
+        // Set up double move for when it's the target player's turn
+        setDoubleMoveTarget(targetColor);
+        setDoubleMoveCount(0);
+        
+        // If it's already the target player's turn, activate immediately
+        if (chess.turn() === targetColor) {
+          setDoubleMoveActive(true);
+          setDoubleMoveActivated(true);
+          toast({
+            title: "Double Move Activated!",
+            description: "You can now make 2 moves in a row",
+          });
+        } else {
+          toast({
+            title: "Double Move Ready",
+            description: `Double move will activate when ${targetPlayerName}'s turn begins`,
+          });
+        }
+      }
+
+      // Handle Piece Empower - empowers a random piece of OPPONENT (so target player can capture it)
+      if (itemName === "Piece Empower" && gameId && game) {
+        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        const opponentColor = targetColor === 'w' ? 'b' : 'w'; // Empower opponent's piece so target can capture it
+        
+        // Find all pieces of the OPPONENT (so target player can capture them)
+        const board = chess.board();
+        const opponentPieces: Array<{ square: Square; pieceType: string }> = [];
+        
+        for (let rank = 0; rank < 8; rank++) {
+          for (let file = 0; file < 8; file++) {
+            const piece = board[rank][file];
+            if (piece && piece.color === opponentColor) {
+              // Convert rank/file to square notation (a1-h8)
+              const square = `${String.fromCharCode(97 + file)}${8 - rank}` as Square;
+              opponentPieces.push({ square, pieceType: piece.type });
+            }
+          }
+        }
+        
+        if (opponentPieces.length > 0) {
+          // Select a random piece from opponent
+          const randomIndex = Math.floor(Math.random() * opponentPieces.length);
+          const selectedPiece = opponentPieces[randomIndex];
+          
+          setEmpoweredPiece({ 
+            square: selectedPiece.square, 
+            player: opponentColor,
+            pieceType: selectedPiece.pieceType 
+          });
+          
+          // Show notification for 2 seconds
+          setShowEmpowerNotification(true);
+          setTimeout(() => {
+            setShowEmpowerNotification(false);
+          }, 2000);
+          
+          // Sync empowered piece to database so both players can see it
+          syncArenaStateToDB({
+            empoweredPiece: { 
+              square: selectedPiece.square, 
+              player: opponentColor,
+              pieceType: selectedPiece.pieceType 
+            },
+          });
+          
+          toast({
+            title: "Piece Empowered!",
+            description: `${targetPlayerName === "White" ? "Black" : "White"}'s piece is empowered. Capture it to gain +20 seconds!`,
+          });
+        } else {
+          toast({
+            title: "No Pieces Available",
+            description: "Cannot empower - no opponent pieces found",
+            variant: "destructive",
+          });
+        }
+      }
 
       // Sync to database
       setMonitorEvents((prev) => {
@@ -554,6 +798,19 @@ const Game = () => {
               const newGame = payload.new as any;
               setGame(newGame);
               if (newGame.board_state) {
+                // Skip update if we're currently performing a swap
+                if (isSwappingRef.current) {
+                  return;
+                }
+                
+                // Skip update if double move is active and it's the target player's turn
+                // (they're making consecutive moves, handled locally)
+                if (doubleMoveActive && doubleMoveTarget && newGame.current_turn === doubleMoveTarget) {
+                  // This is the player making their second move in double move mode
+                  // We handle this locally, so skip the real-time update to avoid conflicts
+                  return;
+                }
+                
                 // Check if opponent made a move (and if they're frozen, reject it)
                 if (freezeOpponent && newGame.current_turn === playerColor && chess.turn() !== playerColor) {
                   // Opponent tried to move while frozen - revert the board state
@@ -564,12 +821,115 @@ const Game = () => {
                   return; // Don't update the board
                 }
                 
-                chess.load(newGame.board_state);
-                setPosition(newGame.board_state);
+                // Check if this is a new move (board state changed)
+                const previousFen = chess.fen();
+                
+                // Only create snapshot if board actually changed (opponent made a move)
+                if (previousFen !== newGame.board_state) {
+                  // Create snapshot BEFORE opponent's move (using current state)
+                  const opponentColor = chess.turn(); // Current turn is the opponent's color
+                  const preMoveSnapshot = createGameSnapshot(chess, opponentColor);
+                  
+                  // Now load the new board state (after opponent's move)
+                  chess.load(newGame.board_state);
+                  const newFen = chess.fen();
+                  
+                  // Update captured pieces after move
+                  const captured = calculateCapturedPieces(chess);
+                  setWhiteCaptured(captured.whiteCaptured);
+                  setBlackCaptured(captured.blackCaptured);
+                  
+                  // Update empowered piece if opponent moved it (for ALL players)
+                  // First, sync from database state to ensure both players see the same empowered piece
+                  if (newGame.arena_state) {
+                    try {
+                      const arenaState = typeof newGame.arena_state === 'string' 
+                        ? JSON.parse(newGame.arena_state) 
+                        : newGame.arena_state;
+                      
+                      if (arenaState.empoweredPiece !== undefined) {
+                        // Sync empowered piece from database (this ensures both players see it)
+                        setEmpoweredPiece(arenaState.empoweredPiece);
+                      }
+                    } catch (e) {
+                      console.error('Error parsing arena state for empowered piece:', e);
+                    }
+                  }
+                  
+                  // Also try to find the piece if we have local state but it's not at the square
+                  // This is a fallback to ensure the piece is tracked correctly
+                  if (empoweredPiece) {
+                    const pieceAtSquare = chess.get(empoweredPiece.square);
+                    if (!pieceAtSquare || 
+                        pieceAtSquare.color !== empoweredPiece.player ||
+                        (empoweredPiece.pieceType && pieceAtSquare.type !== empoweredPiece.pieceType)) {
+                      // Piece is no longer at that square - find it on the board
+                      const board = chess.board();
+                      let foundSquare: Square | null = null;
+                      
+                      for (let rank = 0; rank < 8; rank++) {
+                        for (let file = 0; file < 8; file++) {
+                          const piece = board[rank][file];
+                          if (piece && 
+                              piece.color === empoweredPiece.player && 
+                              (!empoweredPiece.pieceType || piece.type === empoweredPiece.pieceType)) {
+                            const square = `${String.fromCharCode(97 + file)}${8 - rank}` as Square;
+                            foundSquare = square;
+                            break;
+                          }
+                        }
+                        if (foundSquare) break;
+                      }
+                      
+                      if (foundSquare && foundSquare !== empoweredPiece.square) {
+                        // Update to new square
+                        const updatedEmpoweredPiece = { 
+                          square: foundSquare, 
+                          player: empoweredPiece.player,
+                          pieceType: empoweredPiece.pieceType 
+                        };
+                        setEmpoweredPiece(updatedEmpoweredPiece);
+                        syncArenaStateToDB({
+                          empoweredPiece: updatedEmpoweredPiece,
+                        });
+                      } else if (!foundSquare) {
+                        // Piece not found - it was captured
+                        setEmpoweredPiece(null);
+                        syncArenaStateToDB({
+                          empoweredPiece: null,
+                        });
+                      }
+                    }
+                  }
+                  
+                  // Save pre-move snapshot (this is what we'll restore to when undoing)
+                  setMoveHistory((prev) => {
+                    const updated = [...prev, preMoveSnapshot];
+                    console.log('Added opponent move snapshot to history:', {
+                      opponentColor: opponentColor,
+                      historyLength: updated.length,
+                      snapshots: updated.map((s, i) => ({
+                        index: i,
+                        player: s.playerWhoMoved,
+                        move: s.moveNotation
+                      }))
+                    });
+                    // Store in localStorage as backup
+                    const historyKey = `moveHistory_${gameId}`;
+                    try {
+                      localStorage.setItem(historyKey, JSON.stringify(updated));
+                    } catch (e) {
+                      console.error('Error storing history in localStorage:', e);
+                    }
+                    return updated;
+                  });
+                  
+                  setPosition(newFen);
+                }
               }
               
-              // Sync arena state from database (for non-creator players)
-              if (newGame.arena_state && !isGameCreator) {
+              // Sync arena state from database (for ALL players, not just non-creator)
+              if (newGame.arena_state) {
                 try {
                   const arenaState = typeof newGame.arena_state === 'string' 
                     ? JSON.parse(newGame.arena_state) 
@@ -604,6 +964,10 @@ const Game = () => {
                   }
                   if (arenaState.streamUrl) {
                     setStreamUrl(arenaState.streamUrl);
+                  }
+                  // Sync empowered piece state (for ALL players)
+                  if (arenaState.empoweredPiece !== undefined) {
+                    setEmpoweredPiece(arenaState.empoweredPiece);
                   }
                   
                   // Sync points and trigger notifications
@@ -690,6 +1054,47 @@ const Game = () => {
     chess.load(data.board_state);
     setPosition(data.board_state);
 
+    // Calculate captured pieces for current position
+    const captured = calculateCapturedPieces(chess);
+    setWhiteCaptured(captured.whiteCaptured);
+    setBlackCaptured(captured.blackCaptured);
+
+    // Load move history from localStorage if available, otherwise create initial snapshot
+    const historyKey = `moveHistory_${gameId}`;
+    try {
+      const storedHistory = localStorage.getItem(historyKey);
+      if (storedHistory) {
+        const parsedHistory = JSON.parse(storedHistory) as GameSnapshot[];
+        // Ensure we have at least the initial snapshot
+        if (parsedHistory.length > 0) {
+          setMoveHistory(parsedHistory);
+          console.log('Loaded move history from localStorage:', parsedHistory.length, 'snapshots');
+        } else {
+          // Empty array - create initial snapshot
+          const initialSnapshot = createGameSnapshot(chess);
+          setMoveHistory([initialSnapshot]);
+          localStorage.setItem(historyKey, JSON.stringify([initialSnapshot]));
+          console.log('Created initial snapshot (empty history found)');
+        }
+      } else {
+        // Create initial snapshot (starting position)
+        const initialSnapshot = createGameSnapshot(chess);
+        setMoveHistory([initialSnapshot]);
+        localStorage.setItem(historyKey, JSON.stringify([initialSnapshot]));
+        console.log('Created initial snapshot (no history found)');
+      }
+    } catch (e) {
+      console.error('Error loading move history from localStorage:', e);
+      // Create initial snapshot as fallback
+      const initialSnapshot = createGameSnapshot(chess);
+      setMoveHistory([initialSnapshot]);
+      try {
+        localStorage.setItem(historyKey, JSON.stringify([initialSnapshot]));
+      } catch (e2) {
+        console.error('Error saving initial snapshot:', e2);
+      }
+    }
+
     // Get or create player ID
     const storageKey = `player_${gameId}`;
     let playerId = localStorage.getItem(storageKey);
@@ -757,6 +1162,10 @@ const Game = () => {
         if (arenaState.streamUrl) {
           setStreamUrl(arenaState.streamUrl);
         }
+        // Sync empowered piece state
+        if (arenaState.empoweredPiece !== undefined) {
+          setEmpoweredPiece(arenaState.empoweredPiece);
+        }
         // Sync points if available
         if (arenaState.totalPoints !== undefined) {
           // Points will be synced via the milestone system
@@ -777,52 +1186,88 @@ const Game = () => {
     if (data) {
       setMoves(data);
       
-      // Calculate captured pieces correctly
-      const startingPieces = {
-        'p': 8, 'n': 2, 'b': 2, 'r': 2, 'q': 1, 'k': 1
-      };
-      
-      const currentPieces = chess.board().flat().filter(p => p !== null);
-      const whitePieces = currentPieces.filter(p => p?.color === 'w');
-      const blackPieces = currentPieces.filter(p => p?.color === 'b');
-      
-      // Count current pieces
-      const whiteCount: Record<string, number> = {};
-      const blackCount: Record<string, number> = {};
-      
-      whitePieces.forEach(p => {
-        if (p?.type) whiteCount[p.type] = (whiteCount[p.type] || 0) + 1;
-      });
-      
-      blackPieces.forEach(p => {
-        if (p?.type) blackCount[p.type] = (blackCount[p.type] || 0) + 1;
-      });
-      
-      // Calculate captured (what white captured from black)
-      const whiteCapturedPieces: string[] = [];
-      const blackCapturedPieces: string[] = [];
-      
-      Object.entries(startingPieces).forEach(([piece, startCount]) => {
-        if (piece === 'k') return; // Skip king
-        
-        const blackRemaining = blackCount[piece] || 0;
-        const whiteRemaining = whiteCount[piece] || 0;
-        
-        const blackCaptured = startCount - blackRemaining;
-        const whiteCaptured = startCount - whiteRemaining;
-        
-        for (let i = 0; i < blackCaptured; i++) {
-          whiteCapturedPieces.push(piece);
-        }
-        
-        for (let i = 0; i < whiteCaptured; i++) {
-          blackCapturedPieces.push(piece);
-        }
-      });
-      
-      setWhiteCaptured(whiteCapturedPieces);
-      setBlackCaptured(blackCapturedPieces);
+      // Calculate captured pieces
+      const captured = calculateCapturedPieces(chess);
+      setWhiteCaptured(captured.whiteCaptured);
+      setBlackCaptured(captured.blackCaptured);
     }
+  };
+
+  // Calculate captured pieces for a given chess instance
+  const calculateCapturedPieces = (gameInstance: Chess) => {
+    const startingPieces = {
+      'p': 8, 'n': 2, 'b': 2, 'r': 2, 'q': 1, 'k': 1
+    };
+    
+    const currentPieces = gameInstance.board().flat().filter(p => p !== null);
+    const whitePieces = currentPieces.filter(p => p?.color === 'w');
+    const blackPieces = currentPieces.filter(p => p?.color === 'b');
+    
+    // Count current pieces
+    const whiteCount: Record<string, number> = {};
+    const blackCount: Record<string, number> = {};
+    
+    whitePieces.forEach(p => {
+      if (p?.type) whiteCount[p.type] = (whiteCount[p.type] || 0) + 1;
+    });
+    
+    blackPieces.forEach(p => {
+      if (p?.type) blackCount[p.type] = (blackCount[p.type] || 0) + 1;
+    });
+    
+    // Calculate captured (what white captured from black)
+    const whiteCapturedPieces: string[] = [];
+    const blackCapturedPieces: string[] = [];
+    
+    Object.entries(startingPieces).forEach(([piece, startCount]) => {
+      if (piece === 'k') return; // Skip king
+      
+      const blackRemaining = blackCount[piece] || 0;
+      const whiteRemaining = whiteCount[piece] || 0;
+      
+      const blackCaptured = startCount - blackRemaining;
+      const whiteCaptured = startCount - whiteRemaining;
+      
+      for (let i = 0; i < blackCaptured; i++) {
+        whiteCapturedPieces.push(piece);
+      }
+      
+      for (let i = 0; i < whiteCaptured; i++) {
+        blackCapturedPieces.push(piece);
+      }
+    });
+    
+    return {
+      whiteCaptured: whiteCapturedPieces,
+      blackCaptured: blackCapturedPieces,
+    };
+  };
+
+  // Create a full game snapshot for Shield power-up
+  const createGameSnapshot = (gameInstance: Chess, playerWhoMoved?: 'w' | 'b', moveNotation?: string): GameSnapshot => {
+    const fen = gameInstance.fen();
+    const fenParts = fen.split(' ');
+    
+    // Parse captured pieces
+    const captured = calculateCapturedPieces(gameInstance);
+    
+    return {
+      fen: fen,
+      activeColor: fenParts[1] === 'w' ? 'w' : 'b',
+      capturedPieces: {
+        whiteCaptured: captured.whiteCaptured,
+        blackCaptured: captured.blackCaptured,
+      },
+      castlingRights: fenParts[2] || '-',
+      enPassant: fenParts[3] === '-' ? null : fenParts[3],
+      moveNumber: parseInt(fenParts[5]) || 1,
+      halfMoveClock: parseInt(fenParts[4]) || 0,
+      playerWhoMoved: playerWhoMoved,
+      moveNotation: moveNotation,
+      metadata: {
+        timestamp: Date.now(),
+      },
+    };
   };
 
   const joinAsWhite = async (gameData: any, storageKey: string) => {
@@ -906,6 +1351,31 @@ const Game = () => {
     }
   }, [timeBonus, game, gameId, playerColor, consumeTimeBonus, toast]);
 
+  // Activate piece swap when it's the target player's turn
+  useEffect(() => {
+    if (pieceSwapTarget && !pieceSwapActive && chess.turn() === pieceSwapTarget) {
+      // It's now the target player's turn, activate swap mode
+      setPieceSwapActive(true);
+      toast({
+        title: "Piece Swap Active!",
+        description: "Click on two of your pieces to swap their positions",
+      });
+    }
+  }, [chess.turn(), pieceSwapTarget, pieceSwapActive]);
+
+  // Activate double move when it's the target player's turn
+  useEffect(() => {
+    if (doubleMoveTarget && !doubleMoveActive && chess.turn() === doubleMoveTarget && doubleMoveCount === 0) {
+      // It's now the target player's turn, activate double move
+      setDoubleMoveActive(true);
+      setDoubleMoveActivated(true);
+      toast({
+        title: "Double Move Activated!",
+        description: "You can now make 2 moves in a row",
+      });
+    }
+  }, [chess.turn(), doubleMoveTarget, doubleMoveActive, doubleMoveCount]);
+
   const handleSquareClick = useCallback((square: Square) => {
     if (!game || !playerColor) return;
     
@@ -919,6 +1389,54 @@ const Game = () => {
     }
     
     const currentTurn = chess.turn();
+    
+    // Handle piece swap selection
+    if (pieceSwapActive && pieceSwapTarget === playerColor && currentTurn === playerColor) {
+      const piece = chess.get(square);
+      
+      // Only allow selecting own pieces
+      if (!piece || piece.color !== playerColor) {
+        toast({
+          title: "Invalid Selection",
+          description: "You can only swap your own pieces",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      // First piece selection
+      if (!swapSelectedPieces.first) {
+        setSwapSelectedPieces({ first: square, second: null });
+        toast({
+          title: "First Piece Selected",
+          description: "Now click on another piece to swap",
+        });
+        return;
+      }
+      
+      // Second piece selection
+      if (swapSelectedPieces.first === square) {
+        // Clicked the same piece, deselect
+        setSwapSelectedPieces({ first: null, second: null });
+        return;
+      }
+      
+      // Both pieces selected, perform swap
+      setSwapSelectedPieces({ first: swapSelectedPieces.first, second: square });
+      performPieceSwap(swapSelectedPieces.first, square);
+      return;
+    }
+    
+    // Normal move logic - prevent if swap is active
+    if (pieceSwapActive && pieceSwapTarget === playerColor) {
+      toast({
+        title: "Complete Piece Swap First",
+        description: "You must swap two pieces before making a move",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     if (currentTurn !== playerColor) return;
 
     const piece = chess.get(square);
@@ -984,9 +1502,200 @@ const Game = () => {
     }
   };
 
+  const performPieceSwap = useCallback(async (square1: Square, square2: Square) => {
+    if (!game || !gameId) return;
+    
+    const piece1 = chess.get(square1);
+    const piece2 = chess.get(square2);
+    
+    if (!piece1 || !piece2) return;
+    
+    // Set flag to prevent real-time updates from overwriting
+    isSwappingRef.current = true;
+    
+    // Activate swap animation
+    setSwapAnimationActive(true);
+    
+    // Wait for animation, then perform swap
+    setTimeout(async () => {
+      try {
+        // Get current FEN and board state
+        const currentFen = chess.fen();
+        const fenParts = currentFen.split(' ');
+        const boardFen = fenParts[0];
+        
+        // Convert board FEN to 2D array representation
+        const ranks = boardFen.split('/');
+        const board: (string | null)[][] = [];
+        
+        // Parse FEN ranks (from rank 8 to rank 1)
+        for (let rankIdx = 0; rankIdx < 8; rankIdx++) {
+          const rankStr = ranks[rankIdx];
+          const row: (string | null)[] = [];
+          
+          for (let i = 0; i < rankStr.length; i++) {
+            const char = rankStr[i];
+            if (char >= '1' && char <= '8') {
+              // Empty squares
+              const count = parseInt(char);
+              for (let j = 0; j < count; j++) {
+                row.push(null);
+              }
+            } else {
+              // Piece (uppercase = white, lowercase = black)
+              row.push(char);
+            }
+          }
+          
+          // Ensure row has exactly 8 squares
+          while (row.length < 8) {
+            row.push(null);
+          }
+          board.push(row);
+        }
+        
+        // Convert squares to board coordinates
+        // FEN rank 8 is board[0], rank 1 is board[7]
+        const file1 = square1.charCodeAt(0) - 97; // a=0, b=1, etc.
+        const rank1 = 8 - parseInt(square1[1]); // rank 8 = 0, rank 1 = 7
+        const file2 = square2.charCodeAt(0) - 97;
+        const rank2 = 8 - parseInt(square2[1]);
+        
+        // Swap pieces on the board
+        const temp = board[rank1][file1];
+        board[rank1][file1] = board[rank2][file2];
+        board[rank2][file2] = temp;
+        
+        // Convert board back to FEN notation
+        let newBoardFen = '';
+        for (let rankIdx = 0; rankIdx < 8; rankIdx++) {
+          let emptyCount = 0;
+          for (let fileIdx = 0; fileIdx < 8; fileIdx++) {
+            const piece = board[rankIdx][fileIdx];
+            if (piece === null) {
+              emptyCount++;
+            } else {
+              if (emptyCount > 0) {
+                newBoardFen += emptyCount.toString();
+                emptyCount = 0;
+              }
+              newBoardFen += piece;
+            }
+          }
+          if (emptyCount > 0) {
+            newBoardFen += emptyCount.toString();
+          }
+          if (rankIdx < 7) {
+            newBoardFen += '/';
+          }
+        }
+        
+        // Construct new FEN with all parts preserved
+        const newFen = `${newBoardFen} ${fenParts[1]} ${fenParts[2]} ${fenParts[3]} ${fenParts[4]} ${fenParts[5]}`;
+        
+        console.log('Performing piece swap:', {
+          square1,
+          square2,
+          piece1: `${piece1.color}${piece1.type}`,
+          piece2: `${piece2.color}${piece2.type}`,
+          oldFen: currentFen,
+          newFen,
+        });
+        
+        // Validate FEN before loading
+        try {
+          const testChess = new Chess(newFen);
+          // If validation passes, use the new FEN
+          
+          // Load the new position into main chess instance
+          chess.load(newFen);
+          setPosition(newFen);
+          
+          // Update database immediately - this will trigger real-time update, but flag prevents overwrite
+          const { error: updateError } = await supabase
+            .from('games')
+            .update({
+              board_state: newFen,
+            })
+            .eq('id', gameId);
+          
+          if (updateError) {
+            console.error('Error updating board state:', updateError);
+            toast({
+              title: "Error",
+              description: "Failed to save swap to database",
+              variant: "destructive",
+            });
+            // Revert on error
+            chess.load(currentFen);
+            setPosition(currentFen);
+            isSwappingRef.current = false;
+          } else {
+            console.log('Swap saved successfully to database');
+            
+            // Update local game state to match
+            setGame((prev: any) => ({
+              ...prev,
+              board_state: newFen,
+            }));
+            
+            // Clear swap state
+            setPieceSwapActive(false);
+            setPieceSwapTarget(null);
+            setSwapSelectedPieces({ first: null, second: null });
+            
+            toast({
+              title: "Pieces Swapped!",
+              description: "You can now make your move",
+            });
+            
+            // Keep flag set for a bit longer to prevent real-time overwrite
+            setTimeout(() => {
+              isSwappingRef.current = false;
+              console.log('Swap flag cleared, real-time updates re-enabled');
+            }, 2000);
+          }
+        } catch (fenError) {
+          console.error('Invalid FEN after swap:', fenError, { newFen });
+          toast({
+            title: "Swap Failed",
+            description: "Invalid board state after swap",
+            variant: "destructive",
+          });
+          // Revert on error
+          chess.load(currentFen);
+          setPosition(currentFen);
+          isSwappingRef.current = false;
+        }
+      } catch (error) {
+        console.error('Error performing swap:', error);
+        toast({
+          title: "Swap Failed",
+          description: "An error occurred during swap",
+          variant: "destructive",
+        });
+      } finally {
+        // Animation cleanup
+        setTimeout(() => {
+          setSwapAnimationActive(false);
+        }, 500);
+      }
+    }, 1500); // Wait for animation to complete
+  }, [chess, game, gameId, toast, setGame]);
+
   const makeMove = (sourceSquare: Square, targetSquare: Square, promotion: 'q' | 'r' | 'b' | 'n' = 'q') => {
     if (!game || !playerColor) {
       console.log('Cannot move: game or playerColor not set', { game: !!game, playerColor });
+      return;
+    }
+    
+    // Prevent moves if piece swap is active
+    if (pieceSwapActive && pieceSwapTarget === playerColor) {
+      toast({
+        title: "Complete Piece Swap First",
+        description: "You must swap two pieces before making a move",
+        variant: "destructive",
+      });
       return;
     }
     
@@ -1010,12 +1719,9 @@ const Game = () => {
       return;
     }
 
-    // Save current position to history for undo (before making move)
-    const currentFen = chess.fen();
-    setMoveHistory((prev) => [
-      ...prev,
-      { fen: currentFen, move: null },
-    ]);
+    // Create snapshot BEFORE the move (so we can undo to this state)
+    // This snapshot represents the state before the current player's move
+    const preMoveSnapshot = createGameSnapshot(chess, playerColor);
 
     const move = chess.move({
       from: sourceSquare,
@@ -1037,9 +1743,185 @@ const Game = () => {
     }
     
     console.log('Move successful:', move.san);
-    const newFen = chess.fen();
+    let newFen = chess.fen();
+    
+    // Handle double move - keep turn the same after first move
+    const isDoubleMoveActive = doubleMoveActive && doubleMoveTarget === playerColor;
+    if (isDoubleMoveActive && doubleMoveCount === 0) {
+      // First move of double move - modify FEN to keep turn the same
+      const fenParts = newFen.split(' ');
+      // Keep the active color as the same player
+      newFen = `${fenParts[0]} ${playerColor} ${fenParts[2]} ${fenParts[3]} ${fenParts[4]} ${fenParts[5]}`;
+      // Reload chess with modified FEN to keep turn
+      chess.load(newFen);
+    }
+    
+    // Check if empowered piece was CAPTURED
+    // We check if the captured piece matches the empowered piece (by type and color)
+    if (empoweredPiece && move.captured) {
+      const capturedPieceType = move.captured; // Type of captured piece
+      const capturedPieceColor = move.color === 'w' ? 'b' : 'w'; // Captured piece is opposite color
+      
+      // Check if this matches our empowered piece
+      if (capturedPieceColor === empoweredPiece.player && 
+          (!empoweredPiece.pieceType || capturedPieceType === empoweredPiece.pieceType)) {
+        // Empowered piece was captured - grant time bonus to the capturing player
+        const timeField = playerColor === 'w' ? 'white_time_remaining' : 'black_time_remaining';
+        const currentTime = game[timeField] || 0;
+        const newTime = currentTime + 20; // +20 seconds as specified
+        
+        // Show power capture effect
+        setShowPowerCapture(true);
+        setPowerCaptureSquare(targetSquare);
+        
+        // Show +20s notification on clock (similar to Chrono Chip)
+        setChronoChipActive(true);
+        setChronoChipTarget(playerColor);
+        setShowTimeBonus(true);
+        
+        // Update database
+        supabase
+          .from('games')
+          .update({
+            [timeField]: newTime,
+          })
+          .eq('id', gameId)
+          .then(() => {
+            // Update local game state
+            setGame((prev: any) => ({
+              ...prev,
+              [timeField]: newTime,
+            }));
+          });
+        
+        // Clear empowered piece after capture (effect consumed)
+        setEmpoweredPiece(null);
+        
+        // Sync cleared empowered piece to database
+        syncArenaStateToDB({
+          empoweredPiece: null,
+        });
+        
+        // Hide effects after animation
+        setTimeout(() => {
+          setShowPowerCapture(false);
+          setPowerCaptureSquare(null);
+          setChronoChipActive(false);
+          setChronoChipTarget(null);
+        }, 2000);
+        
+        setTimeout(() => {
+          setShowTimeBonus(false);
+        }, 1500);
+        
+        toast({
+          title: "Power Capture!",
+          description: "+20 seconds added to your clock!",
+        });
+      }
+    }
+    
+    // Update empowered piece square if it moved (not captured)
+    // Track the piece by finding it on the board after the move
+    if (empoweredPiece && !move.captured) {
+      // Check if the empowered piece moved from its square
+      if (sourceSquare === empoweredPiece.square) {
+        // Piece moved to a new square - update the empowered square
+        const updatedEmpoweredPiece = { 
+          square: targetSquare, 
+          player: empoweredPiece.player,
+          pieceType: empoweredPiece.pieceType 
+        };
+        setEmpoweredPiece(updatedEmpoweredPiece);
+        
+        // Sync updated empowered piece to database
+        syncArenaStateToDB({
+          empoweredPiece: updatedEmpoweredPiece,
+        });
+      } else {
+        // Check if empowered piece still exists at its square
+        // If not, find it on the board by type and color
+        setTimeout(() => {
+          const pieceAtSquare = chess.get(empoweredPiece.square);
+          if (!pieceAtSquare || 
+              pieceAtSquare.color !== empoweredPiece.player ||
+              (empoweredPiece.pieceType && pieceAtSquare.type !== empoweredPiece.pieceType)) {
+            // Piece is no longer at that square - find it on the board
+            const board = chess.board();
+            let foundSquare: Square | null = null;
+            
+            for (let rank = 0; rank < 8; rank++) {
+              for (let file = 0; file < 8; file++) {
+                const piece = board[rank][file];
+                if (piece && 
+                    piece.color === empoweredPiece.player && 
+                    (!empoweredPiece.pieceType || piece.type === empoweredPiece.pieceType)) {
+                  const square = `${String.fromCharCode(97 + file)}${8 - rank}` as Square;
+                  foundSquare = square;
+                  break;
+                }
+              }
+              if (foundSquare) break;
+            }
+            
+            if (foundSquare) {
+              // Update to new square
+              const updatedEmpoweredPiece = { 
+                square: foundSquare, 
+                player: empoweredPiece.player,
+                pieceType: empoweredPiece.pieceType 
+              };
+              setEmpoweredPiece(updatedEmpoweredPiece);
+              syncArenaStateToDB({
+                empoweredPiece: updatedEmpoweredPiece,
+              });
+            } else {
+              // Piece not found - it was captured
+              setEmpoweredPiece(null);
+              syncArenaStateToDB({
+                empoweredPiece: null,
+              });
+            }
+          }
+        }, 100);
+      }
+    }
+    
     setPosition(newFen);
     setLastMoveSquares({ from: sourceSquare, to: targetSquare });
+
+    // Update captured pieces after move
+    const captured = calculateCapturedPieces(chess);
+    setWhiteCaptured(captured.whiteCaptured);
+    setBlackCaptured(captured.blackCaptured);
+
+    // Save pre-move snapshot (this is what we'll restore to when undoing)
+    // Store it with player info and move notation for tracking
+    const snapshotWithMove = {
+      ...preMoveSnapshot,
+      moveNotation: move.san,
+    };
+    setMoveHistory((prev) => {
+      const updated = [...prev, snapshotWithMove];
+      console.log('Added snapshot to history:', {
+        move: move.san,
+        player: playerColor,
+        historyLength: updated.length,
+        snapshots: updated.map((s, i) => ({
+          index: i,
+          player: s.playerWhoMoved,
+          move: s.moveNotation
+        }))
+      });
+      // Store in localStorage as backup
+      const historyKey = `moveHistory_${gameId}`;
+      try {
+        localStorage.setItem(historyKey, JSON.stringify(updated));
+      } catch (e) {
+        console.error('Error storing history in localStorage:', e);
+      }
+      return updated;
+    });
 
     // Apply fire-trail effect if available
     if (useFireTrail()) {
@@ -1068,6 +1950,32 @@ const Game = () => {
       });
     }
 
+    // Handle double move logic
+    let turnAfterMove = chess.turn(); // Default: normal turn change
+    
+    if (isDoubleMoveActive) {
+      // Increment move count
+      const newMoveCount = doubleMoveCount + 1;
+      
+      if (newMoveCount < 2) {
+        // First move of double move - keep the turn the same
+        turnAfterMove = playerColor; // Keep it as the same player's turn
+        setDoubleMoveCount(newMoveCount);
+        // Show flame effect
+        setDoubleMoveActivated(true);
+        setTimeout(() => {
+          setDoubleMoveActivated(false);
+        }, 2000);
+      } else {
+        // Second move completed - deactivate double move and change turn normally
+        setDoubleMoveActive(false);
+        setDoubleMoveTarget(null);
+        setDoubleMoveCount(0);
+        setDoubleMoveActivated(false);
+        turnAfterMove = chess.turn(); // Normal turn change (opponent's turn)
+      }
+    }
+
     // Update game state async
     (async () => {
       try {
@@ -1075,7 +1983,7 @@ const Game = () => {
           .from('games')
           .update({
             board_state: newFen,
-            current_turn: chess.turn(),
+            current_turn: turnAfterMove,
           })
           .eq('id', gameId);
 
@@ -1183,60 +2091,158 @@ const Game = () => {
     })();
   };
 
-  const handleUndo = useCallback(async () => {
-    if (shieldUses === 0 || !game || !playerColor || moveHistory.length === 0) {
+  const handleUndo = useCallback(async (clickedByColor?: 'w' | 'b') => {
+    // Determine which player clicked the shield
+    const shieldPlayerColor = clickedByColor || playerColor;
+    
+    if (!shieldPlayerColor || !game || !gameId) {
       toast({
         title: "Cannot Undo",
-        description: "No shield available or no moves to undo",
+        description: "Unable to determine player",
         variant: "destructive",
       });
       return;
     }
 
-    // Check if we can undo (must be player's turn and have made a move)
-    if (chess.turn() !== playerColor || chess.history().length === 0) {
+    // Check if the player has shields available
+    const playerShields = shieldPlayerColor === 'w' ? whiteShields : blackShields;
+    if (playerShields === 0) {
       toast({
         title: "Cannot Undo",
-        description: "You can only undo your own moves",
+        description: "No shield available",
         variant: "destructive",
       });
       return;
     }
 
-    // Use shield
-    useShield();
+    // Debug: Log current state
+    console.log('Shield undo attempt:', {
+      moveHistoryLength: moveHistory.length,
+      chessHistoryLength: chess.history().length,
+      currentTurn: chess.turn(),
+      shieldPlayerColor,
+      moveHistory: moveHistory.map((s, i) => ({
+        index: i,
+        player: s.playerWhoMoved,
+        move: s.moveNotation,
+        fen: s.fen.substring(0, 20) + '...'
+      }))
+    });
 
-    // Get the previous position from history
-    const previousState = moveHistory[moveHistory.length - 1];
-    if (!previousState) return;
+    // Edge case: Can't undo if no moves made
+    // moveHistory should have at least 2 items: [initial, preMove1] to undo 1 move
+    if (moveHistory.length <= 1) {
+      toast({
+        title: "Cannot Undo",
+        description: `No moves to undo (history length: ${moveHistory.length})`,
+        variant: "destructive",
+      });
+      return;
+    }
 
-    // Undo the last move
-    chess.undo();
-    const previousFen = chess.fen();
-    setPosition(previousFen);
-    setMoveHistory((prev) => prev.slice(0, -1));
+    // Determine how many moves to undo based on activeColor (whose turn it is now)
+    const activeColor = chess.turn();
+    let movesToUndo: number;
 
-    // Update database
-    await supabase
-      .from('games')
-      .update({
-        board_state: previousFen,
-        current_turn: chess.turn(),
-      })
-      .eq('id', gameId);
+    if (activeColor === 'b') {
+      // Black's turn: White just moved, Black hasn't moved yet this turn
+      // Undo exactly 1 move (White's last move)
+      movesToUndo = 1;
+    } else {
+      // White's turn: Both players already moved this turn (White then Black)
+      // Undo exactly 2 moves (both players' moves)
+      movesToUndo = 2;
+    }
+    
+    // After undo, it should be the turn of the player who clicked the shield
+    const finalTurnColor = shieldPlayerColor;
 
-    // Remove last move from database
-    const { data: lastMove } = await supabase
+    // Structure: [initial(0), preMove1(1), preMove2(2), ...]
+    // Each snapshot is a pre-move snapshot, so to undo N moves, we go back N snapshots
+    // But we need to keep the initial snapshot (index 0)
+    const targetIndex = moveHistory.length - movesToUndo - 1; // -1 because we want the snapshot BEFORE the moves
+
+    // Check if we have enough snapshots
+    // Need: initial(1) + movesToUndo snapshots = movesToUndo + 1 total
+    if (moveHistory.length < movesToUndo + 1) {
+      toast({
+        title: "Cannot Undo",
+        description: `Not enough moves to undo. Need ${movesToUndo + 1} snapshots, have ${moveHistory.length}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Find the target snapshot
+    // If targetIndex is less than 0, use initial snapshot (index 0)
+    const targetSnapshot = moveHistory[Math.max(0, targetIndex)];
+
+    // Decrease shield count for the player who clicked
+    if (shieldPlayerColor === 'w') {
+      setWhiteShields((prev) => Math.max(0, prev - 1));
+    } else {
+      setBlackShields((prev) => Math.max(0, prev - 1));
+    }
+
+    // Also use shield from perk system if available
+    if (shieldUses > 0) {
+      useShield();
+    }
+
+    // Activate rewind animation
+    setShieldRewindActive(true);
+    setShowTurnRewound(true);
+
+    // Restore game state from snapshot
+    chess.load(targetSnapshot.fen);
+    
+    // Ensure the turn is set correctly (should be the turn of the player who clicked shield)
+    // Create a new FEN with the correct turn
+    const fenParts = targetSnapshot.fen.split(' ');
+    const adjustedFen = `${fenParts[0]} ${finalTurnColor} ${fenParts[2]} ${fenParts[3]} ${fenParts[4]} ${fenParts[5]}`;
+    chess.load(adjustedFen);
+    setPosition(adjustedFen);
+    
+    // Restore captured pieces
+    setWhiteCaptured(targetSnapshot.capturedPieces.whiteCaptured);
+    setBlackCaptured(targetSnapshot.capturedPieces.blackCaptured);
+
+    // Update move history (remove undone snapshots)
+    setMoveHistory((prev) => {
+      // Keep everything up to and including the target snapshot
+      const updated = prev.slice(0, Math.max(0, targetIndex) + 1);
+      // Update localStorage
+      const historyKey = `moveHistory_${gameId}`;
+      try {
+        localStorage.setItem(historyKey, JSON.stringify(updated));
+      } catch (e) {
+        console.error('Error storing history in localStorage:', e);
+      }
+      return updated;
+    });
+
+    // Update database - remove undone moves
+    const { data: movesToDelete } = await supabase
       .from('moves')
       .select('id')
       .eq('game_id', gameId)
       .order('move_number', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(movesToUndo);
 
-    if (lastMove) {
-      await supabase.from('moves').delete().eq('id', lastMove.id);
+    if (movesToDelete && movesToDelete.length > 0) {
+      for (const move of movesToDelete) {
+        await supabase.from('moves').delete().eq('id', move.id);
+      }
     }
+
+    // Update board state in database with correct turn
+    await supabase
+      .from('games')
+      .update({
+        board_state: adjustedFen,
+        current_turn: finalTurnColor,
+      })
+      .eq('id', gameId);
 
     // Reload moves list
     const { data: movesData } = await supabase
@@ -1249,11 +2255,21 @@ const Game = () => {
       setMoves(movesData);
     }
 
+    // Hide "TURN REWOUND" text after 0.5s
+    setTimeout(() => {
+      setShowTurnRewound(false);
+    }, 500);
+
+    // Hide rewind animation after 1s
+    setTimeout(() => {
+      setShieldRewindActive(false);
+    }, 1000);
+
     toast({
-      title: "Move Undone",
-      description: "Last move has been undone",
+      title: "Turn Rewound",
+      description: `${movesToUndo} move${movesToUndo > 1 ? 's' : ''} undone. ${shieldPlayerColor === 'w' ? 'White' : 'Black'}'s turn.`,
     });
-  }, [shieldUses, useShield, game, playerColor, moveHistory, chess, gameId, toast]);
+  }, [whiteShields, blackShields, shieldUses, useShield, game, playerColor, gameId, moveHistory, chess, toast]);
 
   const handleResign = async () => {
     if (!playerColor) return;
@@ -1399,7 +2415,9 @@ const Game = () => {
         "";
 
       console.log("Token:", token ? "Present" : "Missing");
+      
       const result = await arena.initializeGame(streamUrl, token);
+
       setArenaLoader(false);
 
       if (result.success && result.data) {
@@ -1476,6 +2494,7 @@ const Game = () => {
     }
   };
 
+  // Show disconnect button when arena is connected (regardless of status, except completed/stopped)
   const showDisconnect = arenaGameState && statusLabel !== "completed" && statusLabel !== "stopped";
 
   if (!game) {
@@ -1580,17 +2599,174 @@ const Game = () => {
             {/* Main game area */}
             <div className="space-y-6">
               {/* Opponent Card */}
-              <PlayerCard
-                color={playerColor === 'b' ? 'white' : 'black'}
-                timeRemaining={playerColor === 'b' ? game.white_time_remaining : game.black_time_remaining}
-                isActive={game.current_turn !== playerColor}
-                capturedPieces={playerColor === 'w' ? whiteCaptured : blackCaptured}
-              />
+              <div className={`relative ${
+                chronoChipActive && chronoChipTarget === (playerColor === 'b' ? 'w' : 'b') ? 'animate-[clockPulse_0.5s_ease-in-out_2]' : ''
+              } ${
+                freezeClockActive && freezeClockTarget === (playerColor === 'b' ? 'w' : 'b') ? 'animate-[clockFreeze_1s_ease-in-out]' : ''
+              }`}>
+                <PlayerCard
+                  color={playerColor === 'b' ? 'white' : 'black'}
+                  timeRemaining={playerColor === 'b' ? game.white_time_remaining : game.black_time_remaining}
+                  isActive={game.current_turn !== playerColor}
+                  capturedPieces={playerColor === 'w' ? whiteCaptured : blackCaptured}
+                  shieldCount={playerColor === 'b' ? whiteShields : blackShields}
+                  onShieldClick={() => {
+                    const targetColor = playerColor === 'b' ? 'w' : 'b';
+                    handleUndo(targetColor);
+                  }}
+                />
+                {/* Double Move ×2 Badge for opponent */}
+                {doubleMoveActive && doubleMoveTarget === (playerColor === 'b' ? 'w' : 'b') && (
+                  <div className="absolute top-2 left-2 z-10">
+                    <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white font-black text-xl px-3 py-1.5 rounded-lg border-2 border-orange-400 shadow-[0_0_20px_rgba(251,146,60,0.8)] animate-pulse">
+                      ×2
+                    </div>
+                  </div>
+                )}
+                {/* +10s notification for opponent */}
+                {showTimeBonus && chronoChipTarget === (playerColor === 'b' ? 'w' : 'b') && (
+                  <div className="absolute top-1/2 right-4 transform -translate-y-1/2 translate-x-full z-[60] pointer-events-none">
+                    <div className="animate-[timeBonusPop_1.5s_ease-out_forwards] ml-4">
+                      <div className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-black font-black text-2xl tracking-wider px-4 py-2 rounded-lg border-2 border-yellow-300 shadow-[0_0_20px_rgba(255,215,0,0.8)]">
+                        +10s
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* -10s notification for opponent */}
+                {showTimeDrain && freezeClockTarget === (playerColor === 'b' ? 'w' : 'b') && (
+                  <div className="absolute top-1/2 right-4 transform -translate-y-1/2 translate-x-full z-[60] pointer-events-none">
+                    <div className="animate-[timeDrainPop_1.5s_ease-out_forwards] ml-4">
+                      <div 
+                        className="text-2xl font-black tracking-wider px-4 py-2 rounded-lg border-2 shadow-[0_0_20px_rgba(135,206,250,0.8)]"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(176, 224, 230, 0.9), rgba(135, 206, 250, 0.9))',
+                          borderColor: 'rgba(135, 206, 250, 0.8)',
+                          color: 'rgba(255, 255, 255, 0.95)',
+                          textShadow: '0 0 10px rgba(135, 206, 250, 1), 0 0 20px rgba(176, 224, 230, 0.8)',
+                          filter: 'drop-shadow(0 0 5px rgba(135, 206, 250, 0.6))',
+                        }}
+                      >
+                        –10s
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Chess Board */}
               <div className="relative">
                 {/* Board container with elegant frame */}
                 <div className="relative p-8 bg-gradient-to-br from-black/90 to-gray-900/90 border-2 border-white/10 rounded-2xl backdrop-blur-xl shadow-2xl">
+                  {/* Piece Swap Visual Effects - positioned relative to board */}
+                  {swapAnimationActive && swapSelectedPieces.first && swapSelectedPieces.second && (
+                    <>
+                      <style>{`
+                        @keyframes swapPulse {
+                          0%, 100% { 
+                            transform: scale(1);
+                            box-shadow: 0 0 20px rgba(147, 51, 234, 0.8);
+                          }
+                          50% { 
+                            transform: scale(1.1);
+                            box-shadow: 0 0 40px rgba(147, 51, 234, 1);
+                          }
+                        }
+                        @keyframes empoweredPulse {
+                          0%, 100% { 
+                            box-shadow: 0 0 25px rgba(6, 182, 212, 1), 0 0 50px rgba(6, 182, 212, 0.6);
+                            border-color: rgba(6, 182, 212, 1);
+                          }
+                          50% { 
+                            box-shadow: 0 0 40px rgba(6, 182, 212, 1), 0 0 80px rgba(6, 182, 212, 0.8);
+                            border-color: rgba(34, 211, 238, 1);
+                          }
+                        }
+                        @keyframes powerCaptureExplosion {
+                          0% {
+                            transform: scale(0);
+                            opacity: 1;
+                          }
+                          50% {
+                            transform: scale(1.5);
+                            opacity: 0.9;
+                          }
+                          100% {
+                            transform: scale(2.5);
+                            opacity: 0;
+                          }
+                        }
+                        @keyframes powerCaptureText {
+                          0% {
+                            opacity: 0;
+                            transform: translateY(0) scale(0.5);
+                          }
+                          20% {
+                            opacity: 1;
+                            transform: translateY(-30px) scale(1.2);
+                          }
+                          100% {
+                            opacity: 0;
+                            transform: translateY(-80px) scale(1);
+                          }
+                        }
+                        @keyframes purpleSwirl {
+                          0% {
+                            transform: translate(-50%, -50%) rotate(0deg) scale(0.8);
+                            opacity: 1;
+                          }
+                          50% {
+                            transform: translate(-50%, -50%) rotate(180deg) scale(1.2);
+                            opacity: 0.9;
+                          }
+                          100% {
+                            transform: translate(-50%, -50%) rotate(360deg) scale(1.5);
+                            opacity: 0;
+                          }
+                        }
+                        @keyframes poofBurst {
+                          0% {
+                            transform: translate(-50%, -50%) scale(0);
+                            opacity: 1;
+                          }
+                          50% {
+                            transform: translate(-50%, -50%) scale(1.5);
+                            opacity: 0.8;
+                          }
+                          100% {
+                            transform: translate(-50%, -50%) scale(2);
+                            opacity: 0;
+                          }
+                        }
+                      `}</style>
+                      {[swapSelectedPieces.first, swapSelectedPieces.second].map((square, idx) => {
+                        const file = square.charCodeAt(0) - 97; // a=0, b=1, etc.
+                        const rank = parseInt(square[1]) - 1; // 1=0, 2=1, etc.
+                        // Calculate position within the board (600px max width, 8 squares)
+                        const squareSize = 75; // Approximate square size
+                        const leftOffset = file * squareSize + squareSize / 2;
+                        const topOffset = (7 - rank) * squareSize + squareSize / 2; // Reverse for board orientation
+                        
+                        return (
+                          <div key={idx} className="absolute pointer-events-none" style={{ left: `${leftOffset}px`, top: `${topOffset}px` }}>
+                            {/* Purple swirl */}
+                            <div className="w-20 h-20 border-4 border-purple-500 rounded-full animate-[purpleSwirl_1.5s_ease-out_forwards]"
+                              style={{
+                                boxShadow: '0 0 30px rgba(147, 51, 234, 0.8), inset 0 0 20px rgba(168, 85, 247, 0.6)',
+                              }}
+                            />
+                            {/* Poof particle burst */}
+                            <div className="absolute inset-0 w-16 h-16 rounded-full animate-[poofBurst_1s_ease-out_forwards]"
+                              style={{
+                                animationDelay: `${idx * 0.1}s`,
+                                background: 'radial-gradient(circle, rgba(168,85,247,0.9) 0%, rgba(147,51,234,0.7) 50%, transparent 100%)',
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
                   {/* Inner glow effect */}
                   <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
                   
@@ -1638,6 +2814,33 @@ const Game = () => {
                   darkSquareStyle={{ backgroundColor: '#769656' }}
                   squareStyles={{
                     ...(selectedSquare ? { [selectedSquare]: { backgroundColor: 'rgba(255, 255, 0, 0.5)' } } : {}),
+                    // Empowered piece highlighting (bright cyan glow)
+                    ...(empoweredPiece ? {
+                      [empoweredPiece.square]: {
+                        backgroundColor: 'rgba(6, 182, 212, 0.4)',
+                        boxShadow: '0 0 25px rgba(6, 182, 212, 1), 0 0 50px rgba(6, 182, 212, 0.6)',
+                        border: '3px solid rgba(6, 182, 212, 1)',
+                        animation: 'empoweredPulse 1.5s ease-in-out infinite',
+                        position: 'relative',
+                      }
+                    } : {}),
+                    // Piece swap selection highlighting
+                    ...(pieceSwapActive && swapSelectedPieces.first ? {
+                      [swapSelectedPieces.first]: {
+                        backgroundColor: 'rgba(147, 51, 234, 0.6)',
+                        boxShadow: '0 0 20px rgba(147, 51, 234, 0.8)',
+                        border: '3px solid rgba(147, 51, 234, 1)',
+                        animation: 'swapPulse 1s ease-in-out infinite',
+                      }
+                    } : {}),
+                    ...(pieceSwapActive && swapSelectedPieces.second ? {
+                      [swapSelectedPieces.second]: {
+                        backgroundColor: 'rgba(147, 51, 234, 0.6)',
+                        boxShadow: '0 0 20px rgba(147, 51, 234, 0.8)',
+                        border: '3px solid rgba(147, 51, 234, 1)',
+                        animation: 'swapPulse 1s ease-in-out infinite',
+                      }
+                    } : {}),
                     ...(lastMoveSquares ? {
                       [lastMoveSquares.from]: { backgroundColor: 'rgba(155, 199, 0, 0.41)' },
                       [lastMoveSquares.to]: { backgroundColor: 'rgba(155, 199, 0, 0.41)' }
@@ -1696,12 +2899,59 @@ const Game = () => {
               </div>
 
               {/* Player Card */}
-              <PlayerCard
-                color={playerColor === 'w' ? 'white' : 'black'}
-                timeRemaining={playerColor === 'w' ? game.white_time_remaining : game.black_time_remaining}
-                isActive={game.current_turn === playerColor}
-                capturedPieces={playerColor === 'b' ? whiteCaptured : blackCaptured}
-              />
+              <div className={`relative ${
+                chronoChipActive && chronoChipTarget === playerColor ? 'animate-[clockPulse_0.5s_ease-in-out_2]' : ''
+              } ${
+                freezeClockActive && freezeClockTarget === playerColor ? 'animate-[clockFreeze_1s_ease-in-out]' : ''
+              }`}>
+                <PlayerCard
+                  color={playerColor === 'w' ? 'white' : 'black'}
+                  timeRemaining={playerColor === 'w' ? game.white_time_remaining : game.black_time_remaining}
+                  isActive={game.current_turn === playerColor}
+                  capturedPieces={playerColor === 'b' ? whiteCaptured : blackCaptured}
+                  shieldCount={playerColor === 'w' ? whiteShields : blackShields}
+                  onShieldClick={() => {
+                    handleUndo(playerColor);
+                  }}
+                />
+                {/* Double Move ×2 Badge for current player */}
+                {doubleMoveActive && doubleMoveTarget === playerColor && (
+                  <div className="absolute top-2 left-2 z-10">
+                    <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white font-black text-xl px-3 py-1.5 rounded-lg border-2 border-orange-400 shadow-[0_0_20px_rgba(251,146,60,0.8)] animate-pulse">
+                      ×2
+                    </div>
+                  </div>
+                )}
+                {/* +10s notification for current player */}
+                {showTimeBonus && chronoChipTarget === playerColor && (
+                  <div className="absolute top-1/2 right-4 transform -translate-y-1/2 translate-x-full z-[60] pointer-events-none">
+                    <div className="animate-[timeBonusPop_1.5s_ease-out_forwards] ml-4">
+                      <div className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-black font-black text-2xl tracking-wider px-4 py-2 rounded-lg border-2 border-yellow-300 shadow-[0_0_20px_rgba(255,215,0,0.8)]">
+                        +10s
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* -10s notification for current player */}
+                {showTimeDrain && freezeClockTarget === playerColor && (
+                  <div className="absolute top-1/2 right-4 transform -translate-y-1/2 translate-x-full z-[60] pointer-events-none">
+                    <div className="animate-[timeDrainPop_1.5s_ease-out_forwards] ml-4">
+                      <div 
+                        className="text-2xl font-black tracking-wider px-4 py-2 rounded-lg border-2 shadow-[0_0_20px_rgba(135,206,250,0.8)]"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(176, 224, 230, 0.9), rgba(135, 206, 250, 0.9))',
+                          borderColor: 'rgba(135, 206, 250, 0.8)',
+                          color: 'rgba(255, 255, 255, 0.95)',
+                          textShadow: '0 0 10px rgba(135, 206, 250, 1), 0 0 20px rgba(176, 224, 230, 0.8)',
+                          filter: 'drop-shadow(0 0 5px rgba(135, 206, 250, 0.6))',
+                        }}
+                      >
+                        –10s
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               
               {/* Game Timer (hidden, updates in background) */}
               {game.game_status === 'playing' && gameId && (
@@ -1729,8 +2979,8 @@ const Game = () => {
                   drawOfferedBy={game.draw_offered_by}
                   playerColor={playerColor}
                   onAcceptDraw={handleAcceptDraw}
-                  onUndo={handleUndo}
-                  shieldUses={shieldUses}
+                  onUndo={() => handleUndo(playerColor || undefined)}
+                  shieldUses={playerColor === 'w' ? whiteShields : blackShields}
                 />
                 <PerkUI
                   hintToken={hintToken}
@@ -1794,6 +3044,190 @@ const Game = () => {
       <MilestoneFeed events={milestoneEvents} />
 
       <FreezeOverlay active={freezeOpponent} />
+
+      {/* Shield Rewind Animation Overlay */}
+      {shieldRewindActive && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-500/20 to-transparent animate-pulse" />
+        </div>
+      )}
+
+      {/* TURN REWOUND Text */}
+      {showTurnRewound && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[60] pointer-events-none">
+          <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white font-black text-4xl tracking-widest uppercase px-8 py-4 rounded-lg border-4 border-white/50 shadow-2xl animate-pulse">
+            TURN REWOUND
+          </div>
+        </div>
+      )}
+
+
+      {/* Piece Empower Notification */}
+      {showEmpowerNotification && empoweredPiece && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[60] pointer-events-none">
+          <div className="bg-gradient-to-r from-cyan-600 to-cyan-800 text-white font-black text-lg tracking-wider uppercase px-6 py-3 rounded-lg border-2 border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.8)] animate-pulse">
+            ⚡ PIECE EMPOWERED - On Capture +20s
+          </div>
+        </div>
+      )}
+
+      {/* Piece Swap Active Indicator */}
+      {pieceSwapActive && pieceSwapTarget === playerColor && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[60] pointer-events-none">
+          <div className="bg-gradient-to-r from-purple-600 to-purple-800 text-white font-black text-lg tracking-wider uppercase px-6 py-3 rounded-lg border-2 border-purple-400 shadow-[0_0_20px_rgba(147,51,234,0.8)] animate-pulse">
+            🔄 PIECE SWAP ACTIVE - Select 2 pieces to swap
+          </div>
+        </div>
+      )}
+
+      {/* Double Move Activated Message */}
+      {doubleMoveActivated && doubleMoveTarget === playerColor && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[60] pointer-events-none">
+          <div className="bg-gradient-to-r from-orange-600 to-orange-800 text-white font-black text-3xl tracking-widest uppercase px-8 py-4 rounded-lg border-4 border-orange-400 shadow-[0_0_30px_rgba(251,146,60,0.9)] animate-pulse">
+            DOUBLE MOVE ACTIVATED!
+          </div>
+        </div>
+      )}
+
+      {/* Double Move Flame Effect on Board */}
+      {doubleMoveActivated && doubleMoveTarget === playerColor && (
+        <div className="fixed inset-0 z-[55] pointer-events-none">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-orange-500/30 to-transparent animate-pulse" 
+            style={{
+              background: 'radial-gradient(ellipse at center, rgba(251,146,60,0.4) 0%, transparent 70%)',
+              animation: 'doubleMoveFlame 2s ease-out forwards',
+            }}
+          />
+          <style>{`
+            @keyframes doubleMoveFlame {
+              0% {
+                opacity: 0;
+                transform: scale(0.8);
+              }
+              50% {
+                opacity: 1;
+                transform: scale(1.1);
+              }
+              100% {
+                opacity: 0;
+                transform: scale(1.2);
+              }
+            }
+          `}</style>
+        </div>
+      )}
+
+
+      {/* Chrono Chip Visual Effects */}
+      {chronoChipActive && chronoChipTarget && (
+        <>
+          {/* Glowing gold chip flying animation */}
+          <div className="fixed inset-0 z-[55] pointer-events-none">
+            <div 
+              className={`absolute ${
+                chronoChipTarget === 'w' 
+                  ? (playerColor === 'w' ? 'top-[20%] left-[50%]' : 'top-[80%] left-[50%]')
+                  : (playerColor === 'w' ? 'top-[80%] left-[50%]' : 'top-[20%] left-[50%]')
+              } animate-[chronoChipFly_1.5s_ease-out_forwards]`}
+            >
+              <div className="w-16 h-16 bg-gradient-to-br from-yellow-400 via-yellow-500 to-yellow-600 rounded-full shadow-[0_0_30px_rgba(255,215,0,0.8),0_0_60px_rgba(255,215,0,0.6)] border-4 border-yellow-300 flex items-center justify-center transform -translate-x-1/2">
+                <div className="w-8 h-8 bg-yellow-200 rounded-full animate-pulse" />
+              </div>
+            </div>
+          </div>
+
+          {/* Clock pulse effect */}
+          <style>{`
+            @keyframes chronoChipFly {
+              0% {
+                transform: translate(-50%, 0) scale(1) rotate(0deg);
+                opacity: 1;
+              }
+              50% {
+                transform: translate(calc(-50% + ${chronoChipTarget === 'w' ? '-150px' : '150px'}), ${chronoChipTarget === 'w' ? '-100px' : '100px'}) scale(0.8) rotate(180deg);
+                opacity: 0.9;
+              }
+              100% {
+                transform: translate(calc(-50% + ${chronoChipTarget === 'w' ? '-300px' : '300px'}), ${chronoChipTarget === 'w' ? '-200px' : '200px'}) scale(0.4) rotate(360deg);
+                opacity: 0;
+              }
+            }
+            @keyframes clockPulse {
+              0%, 100% { transform: scale(1); }
+              50% { transform: scale(1.05); }
+            }
+            @keyframes timeBonusPop {
+              0% {
+                opacity: 0;
+                transform: translateY(0) scale(0.5);
+              }
+              20% {
+                opacity: 1;
+                transform: translateY(-20px) scale(1.2);
+              }
+              100% {
+                opacity: 0;
+                transform: translateY(-60px) scale(1);
+              }
+            }
+            @keyframes clockFreeze {
+              0%, 100% { 
+                filter: brightness(1);
+              }
+              10%, 30%, 50%, 70%, 90% {
+                filter: brightness(1.5) hue-rotate(180deg);
+                box-shadow: 0 0 20px rgba(135, 206, 250, 0.8), 0 0 40px rgba(135, 206, 250, 0.6);
+              }
+              20%, 40%, 60%, 80% {
+                filter: brightness(1);
+              }
+            }
+            @keyframes clockShake {
+              0%, 100% { transform: translateX(0); }
+              10%, 30%, 50%, 70%, 90% { transform: translateX(-3px) rotate(-1deg); }
+              20%, 40%, 60%, 80% { transform: translateX(3px) rotate(1deg); }
+            }
+            @keyframes timeDrainPop {
+              0% {
+                opacity: 0;
+                transform: translateY(0) scale(0.5);
+                filter: blur(5px);
+              }
+              20% {
+                opacity: 1;
+                transform: translateY(-20px) scale(1.2);
+                filter: blur(0px);
+              }
+              100% {
+                opacity: 0;
+                transform: translateY(-60px) scale(1);
+                filter: blur(3px);
+              }
+            }
+          `}</style>
+        </>
+      )}
+
+      {/* Freeze Enemy Clock Visual Effects */}
+      {freezeClockActive && freezeClockTarget && (
+        <>
+          {/* Icy blue flicker overlay on clock with shake effect */}
+          <div 
+            className={`fixed z-[55] pointer-events-none ${
+              freezeClockTarget === 'w'
+                ? (playerColor === 'w' ? 'top-[calc(20%+80px)] right-[calc(25%+20px)]' : 'top-[calc(80%-80px)] right-[calc(25%+20px)]')
+                : (playerColor === 'w' ? 'top-[calc(80%-80px)] right-[calc(25%+20px)]' : 'top-[calc(20%+80px)] right-[calc(25%+20px)]')
+            } w-32 h-16 rounded-lg animate-[clockFreeze_1s_ease-in-out,clockShake_0.5s_ease-in-out_2]`}
+            style={{
+              background: 'linear-gradient(135deg, rgba(135, 206, 250, 0.4), rgba(176, 224, 230, 0.4))',
+              boxShadow: '0 0 30px rgba(135, 206, 250, 0.8), inset 0 0 20px rgba(176, 224, 230, 0.5)',
+              backdropFilter: 'blur(2px)',
+            }}
+          />
+        </>
+      )}
+
+
     </div>
   );
 };
