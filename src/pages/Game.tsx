@@ -472,12 +472,30 @@ const Game = () => {
 
       // Add Shield to the target player if item is "Shield Move"
       if (itemName === "Shield Move") {
+        // Normalize target player name to handle various formats
+        const targetNameLower = (targetPlayerName || "").toString().toLowerCase().trim();
+        const isTargetWhite = targetNameLower === "white" || targetNameLower === "w";
+        const isTargetBlack = targetNameLower === "black" || targetNameLower === "b";
+        
+        console.log('Shield Move drop:', {
+          itemName,
+          targetPlayerName,
+          targetNameLower,
+          isTargetWhite,
+          isTargetBlack,
+          currentTurn: chess.turn(),
+          whiteShields,
+          blackShields
+        });
+        
+        // Calculate updated shield counts
         let updatedWhite = whiteShields;
         let updatedBlack = blackShields;
         
         if (isTargetWhite) {
           updatedWhite = whiteShields + 1;
           setWhiteShields(updatedWhite);
+          console.log('Added shield to White, new count:', updatedWhite);
           // Also activate perk if current player is white
           if (playerColor === 'w') {
             activatePerk("1 shield (undo)");
@@ -485,13 +503,17 @@ const Game = () => {
         } else if (isTargetBlack) {
           updatedBlack = blackShields + 1;
           setBlackShields(updatedBlack);
+          console.log('Added shield to Black, new count:', updatedBlack);
           // Also activate perk if current player is black
           if (playerColor === 'b') {
             activatePerk("1 shield (undo)");
           }
+        } else {
+          console.warn('Shield Move: Could not determine target player', { targetPlayerName, targetNameLower });
         }
         
         // Sync shield counts so both players see the button/notification
+        // This ensures both players see the shield icon regardless of whose turn it is
         syncArenaStateToDB({
           whiteShields: updatedWhite,
           blackShields: updatedBlack,
@@ -2322,16 +2344,25 @@ const Game = () => {
     }
 
     // Determine how many moves to undo based on activeColor (whose turn it is now)
+    // and which player is using the shield
     const activeColor = chess.turn();
     let movesToUndo: number;
 
-    if (activeColor === 'b') {
-      // Black's turn: White just moved, Black hasn't moved yet this turn
-      // Undo exactly 1 move (White's last move)
+    // If it's Black's turn and White uses shield: undo only White's last move (1 move)
+    // If it's White's turn and White uses shield: undo both moves (2 moves)
+    // If it's White's turn and Black uses shield: undo only Black's last move (1 move)
+    // If it's Black's turn and Black uses shield: undo both moves (2 moves)
+    if (activeColor === 'b' && shieldPlayerColor === 'w') {
+      // Black's turn, White using shield: White just moved, undo only White's last move
+      movesToUndo = 1;
+    } else if (activeColor === 'w' && shieldPlayerColor === 'w') {
+      // White's turn, White using shield: Both players moved, undo both moves
+      movesToUndo = 2;
+    } else if (activeColor === 'w' && shieldPlayerColor === 'b') {
+      // White's turn, Black using shield: Black just moved, undo only Black's last move
       movesToUndo = 1;
     } else {
-      // White's turn: Both players already moved this turn (White then Black)
-      // Undo exactly 2 moves (both players' moves)
+      // Black's turn, Black using shield: Both players moved, undo both moves
       movesToUndo = 2;
     }
     
