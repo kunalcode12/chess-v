@@ -106,6 +106,8 @@ const Game = () => {
   const [swapSelectedPieces, setSwapSelectedPieces] = useState<{ first: Square | null; second: Square | null }>({ first: null, second: null });
   const [swapAnimationActive, setSwapAnimationActive] = useState(false);
   const isSwappingRef = useRef(false);
+  const [pieceSwapNonce, setPieceSwapNonce] = useState(0);
+  const [pieceSwapActivatedNonce, setPieceSwapActivatedNonce] = useState<number | null>(null);
   const [doubleMoveActive, setDoubleMoveActive] = useState(false);
   const [doubleMoveTarget, setDoubleMoveTarget] = useState<'w' | 'b' | null>(null);
   const [doubleMoveCount, setDoubleMoveCount] = useState(0);
@@ -437,6 +439,9 @@ const Game = () => {
         itemData?.image || packageData?.image || data?.item?.image;
       const purchaserUsername = data?.purchaserUsername || "Unknown";
       const targetPlayerName = data?.targetPlayerName || "Unknown";
+      const targetNameLower = targetPlayerName.toLowerCase?.() || targetPlayerName;
+      const isTargetWhite = targetNameLower === "white" || targetNameLower === "w";
+      const isTargetBlack = targetNameLower === "black" || targetNameLower === "b";
       const stats =
         itemData?.stats || packageData?.stats || data?.item?.stats || [];
       const cost = data?.cost || packageData?.cost || itemData?.cost || 0;
@@ -467,19 +472,30 @@ const Game = () => {
 
       // Add Shield to the target player if item is "Shield Move"
       if (itemName === "Shield Move") {
-        if (targetPlayerName === "White") {
-          setWhiteShields((prev) => prev + 1);
+        let updatedWhite = whiteShields;
+        let updatedBlack = blackShields;
+        
+        if (isTargetWhite) {
+          updatedWhite = whiteShields + 1;
+          setWhiteShields(updatedWhite);
           // Also activate perk if current player is white
           if (playerColor === 'w') {
             activatePerk("1 shield (undo)");
           }
-        } else if (targetPlayerName === "Black") {
-          setBlackShields((prev) => prev + 1);
+        } else if (isTargetBlack) {
+          updatedBlack = blackShields + 1;
+          setBlackShields(updatedBlack);
           // Also activate perk if current player is black
           if (playerColor === 'b') {
             activatePerk("1 shield (undo)");
           }
         }
+        
+        // Sync shield counts so both players see the button/notification
+        syncArenaStateToDB({
+          whiteShields: updatedWhite,
+          blackShields: updatedBlack,
+        });
         
         toast({
           title: "Shield Received!",
@@ -569,14 +585,29 @@ const Game = () => {
 
       // Handle Piece Swap - allows target player to swap two of their pieces
       if (itemName === "Piece Swap" && gameId && game) {
-        const targetColor = targetPlayerName === "White" ? 'w' : 'b';
+        const targetColor = isTargetWhite ? 'w' : 'b';
+        const newNonce = pieceSwapNonce + 1;
+        const currentTurn = (game && game.current_turn) ? (game.current_turn as 'w' | 'b') : chess.turn();
+        const shouldActivateNow = currentTurn === targetColor;
         
-        // Set up piece swap for when it's the target player's turn
+        // Reset any previous swap state before arming a new one
+        isSwappingRef.current = false;
+        setSwapSelectedPieces({ first: null, second: null });
+        setPieceSwapActive(shouldActivateNow);
         setPieceSwapTarget(targetColor);
+        setPieceSwapNonce(newNonce);
+        setPieceSwapActivatedNonce(null);
+        
+        // Persist so both players see pending swap
+        syncArenaStateToDB({
+          pieceSwapTarget: targetColor,
+          pieceSwapActive: shouldActivateNow, // if active immediately
+          pieceSwapNonce: newNonce,
+          pieceSwapActivatedNonce: shouldActivateNow ? newNonce : null,
+        });
         
         // If it's already the target player's turn, activate swap mode immediately
-        if (chess.turn() === targetColor) {
-          setPieceSwapActive(true);
+        if (shouldActivateNow) {
           toast({
             title: "Piece Swap Active!",
             description: "Click on two of your pieces to swap their positions",
@@ -953,6 +984,21 @@ const Game = () => {
                       timestamp: new Date(e.timestamp)
                     })));
                   }
+                  if (arenaState.pieceSwapTarget !== undefined) {
+                    setPieceSwapTarget(arenaState.pieceSwapTarget);
+                  }
+                  if (arenaState.pieceSwapActive !== undefined) {
+                    setPieceSwapActive(arenaState.pieceSwapActive);
+                  }
+                  // If a swap is armed for the target color and it's now that turn, auto-activate
+                  const liveTurn = newGame.current_turn || chess.turn();
+                  if (
+                    arenaState.pieceSwapTarget &&
+                    liveTurn === arenaState.pieceSwapTarget &&
+                    !pieceSwapActive
+                  ) {
+                    setPieceSwapActive(true);
+                  }
                   if (arenaState.currentCycle) {
                     setCurrentCycle(arenaState.currentCycle);
                   }
@@ -961,6 +1007,40 @@ const Game = () => {
                   }
                   if (arenaState.lastDrop) {
                     setLastDrop(arenaState.lastDrop);
+                    // If shield counts are missing but lastDrop is Shield Move, ensure we mirror counts
+                    const drop = arenaState.lastDrop;
+                    const dropName = drop?.itemName?.toLowerCase?.() || drop?.itemName;
+                    const dropTarget = drop?.targetPlayerName?.toLowerCase?.() || drop?.targetPlayerName;
+                    if (dropName === "shield move") {
+                      if (dropTarget === "white" || dropTarget === "w") {
+                        if (arenaState.whiteShields !== undefined) {
+                          setWhiteShields(arenaState.whiteShields);
+                        } else {
+                          setWhiteShields((prev) => Math.max(prev, 1));
+                        }
+                      } else if (dropTarget === "black" || dropTarget === "b") {
+                        if (arenaState.blackShields !== undefined) {
+                          setBlackShields(arenaState.blackShields);
+                        } else {
+                          setBlackShields((prev) => Math.max(prev, 1));
+                        }
+                      }
+                    }
+          // If last drop was Piece Swap, also hydrate swap state so both sides see it
+          if (dropName === "piece swap") {
+            if (arenaState.pieceSwapTarget !== undefined) {
+              setPieceSwapTarget(arenaState.pieceSwapTarget);
+            }
+            if (arenaState.pieceSwapActive !== undefined) {
+              setPieceSwapActive(arenaState.pieceSwapActive);
+            }
+          }
+                  }
+                  if (arenaState.whiteShields !== undefined) {
+                    setWhiteShields(arenaState.whiteShields);
+                  }
+                  if (arenaState.blackShields !== undefined) {
+                    setBlackShields(arenaState.blackShields);
                   }
                   if (arenaState.streamUrl) {
                     setStreamUrl(arenaState.streamUrl);
@@ -968,6 +1048,18 @@ const Game = () => {
                   // Sync empowered piece state (for ALL players)
                   if (arenaState.empoweredPiece !== undefined) {
                     setEmpoweredPiece(arenaState.empoweredPiece);
+                  }
+                  
+                  // Ensure item drop notifications show for both players
+                  if (arenaState.lastDrop && arenaState.lastDrop.type === "immediate_item_drop") {
+                    const drop = arenaState.lastDrop;
+                    setNotification({
+                      type: "item",
+                      itemName: drop.itemName || "Unknown Item",
+                      cost: drop.cost || 0,
+                      targetPlayerName: drop.targetPlayerName || "Unknown",
+                      purchaserName: drop.purchaserUsername || drop.purchaserName || "Viewer",
+                    });
                   }
                   
                   // Sync points and trigger notifications
@@ -1150,6 +1242,30 @@ const Game = () => {
             timestamp: new Date(e.timestamp)
           })));
         }
+        if (arenaState.pieceSwapTarget !== undefined) {
+          setPieceSwapTarget(arenaState.pieceSwapTarget);
+        }
+        if (arenaState.pieceSwapActive !== undefined) {
+          setPieceSwapActive(arenaState.pieceSwapActive);
+        }
+        if (arenaState.pieceSwapNonce !== undefined) {
+          setPieceSwapNonce(arenaState.pieceSwapNonce);
+        }
+        if (arenaState.pieceSwapActivatedNonce !== undefined) {
+          setPieceSwapActivatedNonce(arenaState.pieceSwapActivatedNonce);
+        }
+        if (arenaState.pieceSwapActivatedNonce !== undefined) {
+          setPieceSwapActivatedNonce(arenaState.pieceSwapActivatedNonce);
+        }
+        // If swap is armed and it's currently that turn, activate it
+        const liveTurn = data.current_turn || chess.turn();
+        if (
+          arenaState.pieceSwapTarget &&
+          liveTurn === arenaState.pieceSwapTarget &&
+          !pieceSwapActive
+        ) {
+          setPieceSwapActive(true);
+        }
         if (arenaState.currentCycle) {
           setCurrentCycle(arenaState.currentCycle);
         }
@@ -1159,12 +1275,29 @@ const Game = () => {
         if (arenaState.lastDrop) {
           setLastDrop(arenaState.lastDrop);
         }
+        if (arenaState.whiteShields !== undefined) {
+          setWhiteShields(arenaState.whiteShields);
+        }
+        if (arenaState.blackShields !== undefined) {
+          setBlackShields(arenaState.blackShields);
+        }
         if (arenaState.streamUrl) {
           setStreamUrl(arenaState.streamUrl);
         }
         // Sync empowered piece state
         if (arenaState.empoweredPiece !== undefined) {
           setEmpoweredPiece(arenaState.empoweredPiece);
+        }
+        // Show item drop notification for both players when syncing state
+        if (arenaState.lastDrop && arenaState.lastDrop.type === "immediate_item_drop") {
+          const drop = arenaState.lastDrop;
+          setNotification({
+            type: "item",
+            itemName: drop.itemName || "Unknown Item",
+            cost: drop.cost || 0,
+            targetPlayerName: drop.targetPlayerName || "Unknown",
+            purchaserName: drop.purchaserUsername || drop.purchaserName || "Viewer",
+          });
         }
         // Sync points if available
         if (arenaState.totalPoints !== undefined) {
@@ -1351,17 +1484,22 @@ const Game = () => {
     }
   }, [timeBonus, game, gameId, playerColor, consumeTimeBonus, toast]);
 
-  // Activate piece swap when it's the target player's turn
+  // Activate piece swap when it's the target player's turn (for both colors)
   useEffect(() => {
-    if (pieceSwapTarget && !pieceSwapActive && chess.turn() === pieceSwapTarget) {
-      // It's now the target player's turn, activate swap mode
-      setPieceSwapActive(true);
-      toast({
-        title: "Piece Swap Active!",
-        description: "Click on two of your pieces to swap their positions",
-      });
+    const currentTurn = (game && game.current_turn) ? (game.current_turn as 'w' | 'b') : chess.turn();
+    if (pieceSwapTarget && currentTurn === pieceSwapTarget) {
+      // Only activate once per drop (nonce)
+      if (!pieceSwapActive || pieceSwapActivatedNonce !== pieceSwapNonce) {
+        setPieceSwapActive(true);
+        setPieceSwapActivatedNonce(pieceSwapNonce);
+        syncArenaStateToDB({ pieceSwapActive: true, pieceSwapTarget, pieceSwapActivatedNonce: pieceSwapNonce });
+        toast({
+          title: "Piece Swap Active!",
+          description: "Click on two of your pieces to swap their positions",
+        });
+      }
     }
-  }, [chess.turn(), pieceSwapTarget, pieceSwapActive]);
+  }, [game?.current_turn, pieceSwapTarget, pieceSwapActive, pieceSwapNonce, pieceSwapActivatedNonce, syncArenaStateToDB, chess]);
 
   // Activate double move when it's the target player's turn
   useEffect(() => {
@@ -1403,6 +1541,15 @@ const Game = () => {
         });
         return;
       }
+      // Disallow swapping kings
+      if ((piece.type as string) === 'k') {
+        toast({
+          title: "Cannot Swap King",
+          description: "Kings cannot be swapped",
+          variant: "destructive",
+        });
+        return;
+      }
       
       // First piece selection
       if (!swapSelectedPieces.first) {
@@ -1418,6 +1565,15 @@ const Game = () => {
       if (swapSelectedPieces.first === square) {
         // Clicked the same piece, deselect
         setSwapSelectedPieces({ first: null, second: null });
+        return;
+      }
+      // Disallow swapping with a king on the second selection
+      if ((piece.type as string) === 'k') {
+        toast({
+          title: "Cannot Swap King",
+          description: "Kings cannot be swapped",
+          variant: "destructive",
+        });
         return;
       }
       
@@ -1509,6 +1665,18 @@ const Game = () => {
     const piece2 = chess.get(square2);
     
     if (!piece1 || !piece2) return;
+    // Disallow swapping kings (guard in case selection check missed)
+    if ((piece1.type as string) === 'k' || (piece2.type as string) === 'k') {
+      toast({
+        title: "Cannot Swap King",
+        description: "Kings cannot be swapped",
+        variant: "destructive",
+      });
+      setPieceSwapActive(false);
+      setPieceSwapTarget(null);
+      setSwapSelectedPieces({ first: null, second: null });
+      return;
+    }
     
     // Set flag to prevent real-time updates from overwriting
     isSwappingRef.current = true;
@@ -1590,8 +1758,12 @@ const Game = () => {
           }
         }
         
-        // Construct new FEN with all parts preserved
-        const newFen = `${newBoardFen} ${fenParts[1]} ${fenParts[2]} ${fenParts[3]} ${fenParts[4]} ${fenParts[5]}`;
+        // After a swap, the swapping player's turn is consumed
+        const swapperColor = pieceSwapTarget || playerColor || (fenParts[1] === 'w' ? 'w' : 'b');
+        const nextTurn = swapperColor === 'w' ? 'b' : 'w';
+        
+        // Construct new FEN with turn handed to the opponent
+        const newFen = `${newBoardFen} ${nextTurn} ${fenParts[2]} ${fenParts[3]} ${fenParts[4]} ${fenParts[5]}`;
         
         console.log('Performing piece swap:', {
           square1,
@@ -1616,6 +1788,7 @@ const Game = () => {
             .from('games')
             .update({
               board_state: newFen,
+              current_turn: nextTurn,
             })
             .eq('id', gameId);
           
@@ -1637,12 +1810,19 @@ const Game = () => {
             setGame((prev: any) => ({
               ...prev,
               board_state: newFen,
+              current_turn: nextTurn,
             }));
             
             // Clear swap state
             setPieceSwapActive(false);
             setPieceSwapTarget(null);
             setSwapSelectedPieces({ first: null, second: null });
+            // Sync cleared swap state so both players stop seeing the prompt
+            syncArenaStateToDB({
+              pieceSwapActive: false,
+              pieceSwapTarget: null,
+            });
+            isSwappingRef.current = false;
             
             toast({
               title: "Pieces Swapped!",
@@ -1674,6 +1854,7 @@ const Game = () => {
           description: "An error occurred during swap",
           variant: "destructive",
         });
+        isSwappingRef.current = false;
       } finally {
         // Animation cleanup
         setTimeout(() => {
@@ -2178,11 +2359,20 @@ const Game = () => {
     const targetSnapshot = moveHistory[Math.max(0, targetIndex)];
 
     // Decrease shield count for the player who clicked
+    let updatedWhite = whiteShields;
+    let updatedBlack = blackShields;
     if (shieldPlayerColor === 'w') {
-      setWhiteShields((prev) => Math.max(0, prev - 1));
+      updatedWhite = Math.max(0, whiteShields - 1);
+      setWhiteShields(updatedWhite);
     } else {
-      setBlackShields((prev) => Math.max(0, prev - 1));
+      updatedBlack = Math.max(0, blackShields - 1);
+      setBlackShields(updatedBlack);
     }
+    // Sync shield counts after use so both players stay in sync
+    syncArenaStateToDB({
+      whiteShields: updatedWhite,
+      blackShields: updatedBlack,
+    });
 
     // Also use shield from perk system if available
     if (shieldUses > 0) {
@@ -2610,10 +2800,7 @@ const Game = () => {
                   isActive={game.current_turn !== playerColor}
                   capturedPieces={playerColor === 'w' ? whiteCaptured : blackCaptured}
                   shieldCount={playerColor === 'b' ? whiteShields : blackShields}
-                  onShieldClick={() => {
-                    const targetColor = playerColor === 'b' ? 'w' : 'b';
-                    handleUndo(targetColor);
-                  }}
+                  onShieldClick={undefined} // Opponent cannot trigger your shield
                 />
                 {/* Double Move ×2 Badge for opponent */}
                 {doubleMoveActive && doubleMoveTarget === (playerColor === 'b' ? 'w' : 'b') && (

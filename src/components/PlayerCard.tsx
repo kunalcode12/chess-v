@@ -94,6 +94,7 @@ const PlayerCard = ({ color, timeRemaining, isActive, capturedPieces, shieldCoun
                   {shieldCount > 0 && (
                     <button
                       onClick={onShieldClick}
+                      disabled={!onShieldClick}
                       className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-900/30 border border-blue-600/50 hover:bg-blue-900/50 transition-all duration-200 hover:scale-105 group disabled:opacity-50 disabled:cursor-not-allowed"
                       title={`${shieldCount} Shield${shieldCount > 1 ? 's' : ''} - Click to rewind turn during your turn`}
                     >
