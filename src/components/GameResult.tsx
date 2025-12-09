@@ -22,7 +22,11 @@ const GameResult = ({ game, moves, onPlayAgain, playerColor, totalPoints = 0 }: 
   const [moveEvaluations, setMoveEvaluations] = useState<Array<{ score: number; mate?: number }>>([]);
   const [showRedirectDialog, setShowRedirectDialog] = useState(false);
   const [redirectCountdown, setRedirectCountdown] = useState(3);
+  const [hasUpdatedPoints, setHasUpdatedPoints] = useState(false);
   const { evaluatePosition, isReady } = useStockfish();
+  const playerWon = playerColor
+    ? game.winner === (playerColor === 'w' ? 'white' : 'black')
+    : false;
   
   // Calculate evaluations for all moves
 
@@ -46,10 +50,6 @@ const GameResult = ({ game, moves, onPlayAgain, playerColor, totalPoints = 0 }: 
 
       return () => clearTimeout(countdownTimer);
     } else if (showRedirectDialog && redirectCountdown === 0) {
-      // Determine if player won
-      const playerWon = playerColor 
-        ? game.winner === (playerColor === 'w' ? 'white' : 'black')
-        : false;
       const pointsEarned = totalPoints || 0;
       
       // Redirect to game center
@@ -57,6 +57,49 @@ const GameResult = ({ game, moves, onPlayAgain, playerColor, totalPoints = 0 }: 
       window.location.href = redirectUrl;
     }
   }, [showRedirectDialog, redirectCountdown, playerColor, game.winner, totalPoints]);
+
+  // Award points to backend when player wins (once)
+  useEffect(() => {
+    if (!playerWon || hasUpdatedPoints) return;
+
+    const wallet = localStorage.getItem("wallet");
+    if (!wallet) {
+      console.warn("Wallet not found; skipping points update");
+      return;
+    }
+
+    const pointsToAward = totalPoints || 200; // fallback to 200 if totalPoints not provided
+    const operation = "add";
+
+    (async () => {
+      try {
+        const response = await fetch(
+          `https://backend.empireofbits.fun/api/v1/users/${wallet}/points`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              points: pointsToAward,
+              operation,
+            }),
+          }
+        );
+
+        const data = await response.json();
+        console.log(data);
+
+        if (!data.success) {
+          throw new Error(data.error || "Failed to update points in backend");
+        }
+
+        setHasUpdatedPoints(true);
+      } catch (err) {
+        console.error("Error updating points in backend:", err);
+      }
+    })();
+  }, [playerWon, totalPoints, hasUpdatedPoints]);
   useEffect(() => {
     if (!isReady || moves.length === 0) return;
     
