@@ -285,7 +285,12 @@ export class ArenaGameService {
   async initializeGame(
     streamUrl: string,
     userToken: string,
-  ): Promise<{ success: boolean; data?: GameState; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    data?: GameState;
+    error?: string;
+    streamerRoleRequired?: boolean;
+  }> {
     try {
       this.userToken = userToken;
       console.log("User Token:", this.userToken);
@@ -334,9 +339,31 @@ export class ArenaGameService {
         data: this.gameState ?? undefined,
       };
     } catch (error: any) {
+      const status = error?.response?.status;
+      const body = error?.response?.data;
+      const apiError = body?.error;
+      const code =
+        typeof apiError === "object" && apiError !== null
+          ? apiError.code
+          : undefined;
+      const apiMessage =
+        typeof apiError === "object" && apiError !== null
+          ? apiError.message
+          : undefined;
+      const streamerRoleRequired =
+        status === 403 &&
+        code === "FORBIDDEN" &&
+        apiMessage === "Active streamer role required";
+
+      const message =
+        apiMessage ||
+        (typeof body?.message === "string" ? body.message : undefined) ||
+        "Failed to initialize game";
+
       return {
         success: false,
-        error: error.response?.data?.message || "Failed to initialize game",
+        error: message,
+        streamerRoleRequired,
       };
     }
   }

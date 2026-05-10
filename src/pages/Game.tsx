@@ -5,6 +5,14 @@ import Chessboard from "chessboardjsx";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Copy, ArrowLeft } from "lucide-react";
@@ -130,6 +138,7 @@ const Game = () => {
   const [lastDrop, setLastDrop] = useState<any>(null);
   const [lastBoostCycleUpdate, setLastBoostCycleUpdate] = useState<any>(null);
   const [arenaLoader, setArenaLoader] = useState(false);
+  const [streamerRoleModalOpen, setStreamerRoleModalOpen] = useState(false);
   const [notification, setNotification] = useState<
     | { type: "boost"; boosterName: string; boostAmount: number }
     | { type: "item"; itemName: string; cost: number; targetPlayerName: string; purchaserName: string }
@@ -2655,6 +2664,8 @@ const Game = () => {
           title: "Arena Ready",
           description: `Session ID: ${result.data.sessionId || result.data.gameId}`,
         });
+      } else if (result.streamerRoleRequired) {
+        setStreamerRoleModalOpen(true);
       } else {
         toast({
           title: "Arena Init Failed",
@@ -3249,6 +3260,41 @@ const Game = () => {
         notification={notification}
         onClose={() => setNotification(null)}
       />
+
+      <Dialog open={streamerRoleModalOpen} onOpenChange={setStreamerRoleModalOpen}>
+        <DialogContent className="border-white/10 bg-zinc-950 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">Streamer mode required</DialogTitle>
+            <DialogDescription className="text-white/70">
+              Arena needs an active streamer role on your account. Open{" "}
+              <a
+                href="https://vorld.tv/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-white underline underline-offset-2 hover:text-white/90"
+              >
+                https://vorld.tv/
+              </a>
+              , go to your profile, and enable streamer mode. You can continue playing chess here—nothing else changes until you connect again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              className="border-white/20 bg-transparent text-white hover:bg-white/10"
+              onClick={() => setStreamerRoleModalOpen(false)}
+            >
+              Close
+            </Button>
+            <Button type="button" className="bg-white text-black hover:bg-white/90" asChild>
+              <a href="https://vorld.tv/" target="_blank" rel="noopener noreferrer">
+                Open VORLD.TV
+              </a>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <MilestoneAnimations
         activeMilestone={activeMilestone}
