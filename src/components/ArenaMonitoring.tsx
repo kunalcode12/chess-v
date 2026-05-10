@@ -160,15 +160,17 @@ const ArenaMonitoring = ({
         {/* Horizontal Boxes Layout */}
         {arenaGameState && (
           <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            {/* Game Info Box */}
+            {/* Session Info Box */}
             {arenaGameState && (
               <div className="relative p-3 bg-black/50 border-2 border-white/10 rounded-lg backdrop-blur-sm">
                 <div className="flex items-center gap-2 mb-2">
                   <Activity className="w-4 h-4 text-white/70" />
-                  <span className="text-xs font-black tracking-widest uppercase text-white/70">Game ID</span>
+                  <span className="text-xs font-black tracking-widest uppercase text-white/70">
+                    {arenaGameState.sessionId ? "Session ID" : "Game ID"}
+                  </span>
                 </div>
                 <p className="font-mono text-xs font-black text-white tracking-wider truncate">
-                  {arenaGameState.gameId?.slice(0, 8)}...
+                  {(arenaGameState.sessionId || arenaGameState.gameId)?.slice(0, 8)}...
                 </p>
               </div>
             )}

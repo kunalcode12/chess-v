@@ -53,7 +53,7 @@ const GameResult = ({ game, moves, onPlayAgain, playerColor, totalPoints = 0 }: 
       const pointsEarned = totalPoints || 0;
       
       // Redirect to game center
-      const redirectUrl = `https://empireofbits.fun/?gameWon=${playerWon}&gameName=ChessMaster&pointsEarned=${200}`;
+      const redirectUrl = `https://empireofbits.xyz/?gameWon=${playerWon}&gameName=ChessMaster&pointsEarned=${200}`;
       window.location.href = redirectUrl;
     }
   }, [showRedirectDialog, redirectCountdown, playerColor, game.winner, totalPoints]);
@@ -74,7 +74,7 @@ const GameResult = ({ game, moves, onPlayAgain, playerColor, totalPoints = 0 }: 
     (async () => {
       try {
         const response = await fetch(
-          `https://backend.empireofbits.fun/api/v1/users/${wallet}/points`,
+          `https://backend-em-b0an.onrender.com/api/v1/users/${wallet}/points`,
           {
             method: "PUT",
             headers: {

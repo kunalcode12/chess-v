@@ -2653,7 +2653,7 @@ const Game = () => {
         
         toast({
           title: "Arena Ready",
-          description: `Game ID: ${result.data.gameId}`,
+          description: `Session ID: ${result.data.sessionId || result.data.gameId}`,
         });
       } else {
         toast({
